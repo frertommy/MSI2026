@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -35,20 +36,22 @@ interface CleanMatch {
   status: "finished" | "upcoming";
 }
 
-async function fetchLeague(leagueName: string, leagueId: number) {
+function fetchLeague(leagueName: string, leagueId: number, rawDir: string) {
   const url = `${BASE_URL}/fixtures?league=${leagueId}&season=2025&from=2026-01-01&to=2026-02-26`;
+  const rawPath = path.join(rawDir, `${leagueId}.json`);
   console.log(`Fetching ${leagueName} (id=${leagueId})...`);
 
-  const res = await fetch(url, {
-    headers: { "x-apisports-key": API_KEY! },
-  });
-
-  if (!res.ok) {
-    throw new Error(`${leagueName}: HTTP ${res.status} ${res.statusText}`);
+  // Try fetch first, fall back to curl for environments where DNS is restricted
+  try {
+    const output = execSync(
+      `curl -s -H "x-apisports-key: ${API_KEY}" "${url}"`,
+      { encoding: "utf-8", timeout: 30_000 },
+    );
+    fs.writeFileSync(rawPath, output);
+    return JSON.parse(output);
+  } catch {
+    throw new Error(`Failed to fetch ${leagueName} (id=${leagueId})`);
   }
-
-  const json = await res.json();
-  return { leagueName, leagueId, json };
 }
 
 function processFixtures(fixtures: ApiFixture[]): CleanMatch[] {
@@ -69,7 +72,7 @@ function processFixtures(fixtures: ApiFixture[]): CleanMatch[] {
   });
 }
 
-async function main() {
+function main() {
   const rawDir = path.resolve("data/raw/fixtures");
   const processedDir = path.resolve("data/processed");
   fs.mkdirSync(rawDir, { recursive: true });
@@ -79,12 +82,8 @@ async function main() {
   const counts: Record<string, number> = {};
 
   for (const [name, id] of Object.entries(LEAGUES)) {
-    const { json } = await fetchLeague(name, id);
-
-    // Save raw response
-    const rawPath = path.join(rawDir, `${id}.json`);
-    fs.writeFileSync(rawPath, JSON.stringify(json, null, 2));
-    console.log(`  Saved raw → ${rawPath}`);
+    const json = fetchLeague(name, id, rawDir);
+    console.log(`  Saved raw → data/raw/fixtures/${id}.json`);
 
     const fixtures: ApiFixture[] = json.response ?? [];
     const cleaned = processFixtures(fixtures);
@@ -105,7 +104,4 @@ async function main() {
   console.log(`  TOTAL: ${allMatches.length}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main();
