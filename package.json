@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pull-matches": "tsx src/pull-matches.ts"
+    "pull-matches": "tsx src/pull-matches.ts",
+    "pull-odds": "tsx src/pull-odds-injuries.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7"
