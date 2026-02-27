@@ -1,6 +1,11 @@
-import { POLL_INTERVALS, CREDITS_FALLBACK_INTERVAL } from "./config.js";
+import {
+  POLL_INTERVALS,
+  CREDITS_FALLBACK_INTERVAL,
+  CREDITS_DAILY_SOFT_LIMIT,
+} from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
+import { getSupabase } from "./api/supabase-client.js";
 import { pollOdds } from "./services/odds-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
 import { runPricingEngine } from "./services/pricing-engine.js";
@@ -15,6 +20,7 @@ export class Scheduler {
   private lookup: TeamLookup | null = null;
   private creditTracker: CreditTracker;
   private lastPollResult: PollResult | null = null;
+  private lastInterval: number = POLL_INTERVALS.FAR_FROM_KICKOFF;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -50,6 +56,7 @@ export class Scheduler {
     if (!this.running) return;
 
     const interval = this.computeNextInterval();
+    this.lastInterval = interval;
     const minutes = (interval / 60000).toFixed(1);
     log.info(`Next poll in ${minutes} min`);
 
@@ -97,6 +104,9 @@ export class Scheduler {
 
       this.creditTracker.logStatus();
 
+      // 5. Write credit stats to Supabase for frontend dashboard
+      await this.writeCreditStats();
+
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
       log.info(`═══ Cycle #${this.cycleCount} complete in ${elapsed}s ═══`);
 
@@ -107,6 +117,67 @@ export class Scheduler {
         err instanceof Error ? err.message : err
       );
       updateHealth({ status: "degraded" });
+    }
+  }
+
+  /**
+   * Upsert credit stats to api_credits table so the frontend can display them.
+   * Gracefully degrades if the table doesn't exist yet.
+   */
+  private async writeCreditStats(): Promise<void> {
+    const sb = getSupabase();
+    const now = new Date().toISOString();
+    const intervalSec = Math.round(this.lastInterval / 1000);
+    const nextPollAt = new Date(Date.now() + this.lastInterval).toISOString();
+    const status = this.creditTracker.getStatus();
+
+    // Odds API row
+    const oddsRow = {
+      provider: "odds_api",
+      credits_remaining: status.remaining,
+      credits_used_today: status.usedToday,
+      daily_budget: CREDITS_DAILY_SOFT_LIMIT,
+      last_poll_at: now,
+      poll_interval_seconds: intervalSec,
+      next_poll_at: nextPollAt,
+    };
+
+    // API-Football row (basic — no granular credit tracking)
+    const footballRow = {
+      provider: "api_football",
+      credits_remaining: null,
+      credits_used_today: this.cycleCount % 2 === 0 ? 5 : 0, // 5 leagues every other cycle
+      daily_budget: 100,
+      last_poll_at: this.cycleCount % 2 === 0 ? now : undefined,
+      poll_interval_seconds: intervalSec * 2, // runs every other cycle
+      next_poll_at: new Date(Date.now() + this.lastInterval * 2).toISOString(),
+    };
+
+    try {
+      const { error: oddsErr } = await sb
+        .from("api_credits")
+        .upsert([oddsRow], { onConflict: "provider" });
+
+      if (oddsErr) {
+        if (oddsErr.code === "PGRST205") {
+          log.debug("api_credits table not found — skipping credit stats write");
+        } else {
+          log.warn("Failed to write odds credit stats", oddsErr.message);
+        }
+        return;
+      }
+
+      const { error: fbErr } = await sb
+        .from("api_credits")
+        .upsert([footballRow], { onConflict: "provider" });
+
+      if (fbErr && fbErr.code !== "PGRST205") {
+        log.warn("Failed to write football credit stats", fbErr.message);
+      }
+
+      log.debug("Credit stats written to api_credits");
+    } catch {
+      log.debug("api_credits write failed — table may not exist");
     }
   }
 

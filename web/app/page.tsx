@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { TeamTable } from "./team-table";
+import { CreditBar } from "./credit-bar";
 import type { Match, TeamRow } from "@/lib/types";
 
 // Fetch latest oracle dollar_price + implied_elo per team from team_prices
@@ -209,6 +210,7 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-background">
+      <CreditBar />
       <header className="border-b border-border px-6 py-4">
         <div className="mx-auto max-w-7xl flex items-center justify-between">
           <div className="flex items-center gap-3">
