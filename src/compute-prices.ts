@@ -459,12 +459,41 @@ interface Shock {
   amount: number; // elo shock
 }
 
+interface ShockExample {
+  match: string;
+  date: string;
+  team: string;
+  opponent: string;
+  oppElo: number;
+  leagueMean: number;
+  kFlat: number;
+  kWeighted: number;
+  shockFlat: number;
+  shockWeighted: number;
+}
+
 function computeShocks(
   matches: Match[],
   normalizedOdds: Map<number, NormalizedOdds>,
-  k: number
-): Shock[] {
+  kBase: number,
+  startingElos: Map<string, number>,
+  teamLeague: Map<string, string>
+): { shocks: Shock[]; examples: ShockExample[] } {
+  // Compute league means from starting Elos for K-weighting
+  const leagueTeams = new Map<string, string[]>();
+  for (const [team, league] of teamLeague) {
+    if (!leagueTeams.has(league)) leagueTeams.set(league, []);
+    leagueTeams.get(league)!.push(team);
+  }
+  const leagueMeanElo = new Map<string, number>();
+  for (const [league, teams] of leagueTeams) {
+    const mean = teams.reduce((s, t) => s + (startingElos.get(t) ?? INITIAL_ELO), 0) / teams.length;
+    leagueMeanElo.set(league, mean);
+  }
+
   const shocks: Shock[] = [];
+  const examples: ShockExample[] = [];
+
   for (const m of matches) {
     const odds = normalizedOdds.get(m.fixture_id);
     if (!odds) continue;
@@ -474,19 +503,54 @@ function computeShocks(
     const ag = parseInt(parts[1]);
     if (isNaN(hg) || isNaN(ag)) continue;
 
-    // Home team
+    const league = teamLeague.get(m.home_team) ?? "";
+    const lMean = leagueMeanElo.get(league) ?? INITIAL_ELO;
+
+    // Home team: opponent is away team
+    const awayElo = startingElos.get(m.away_team) ?? INITIAL_ELO;
+    const homeEffK = kBase * (1 + (awayElo - lMean) / 400);
     const homeActual = hg > ag ? 3 : hg === ag ? 1 : 0;
     const homeExpected = 3 * odds.homeProb + 1 * odds.drawProb + 0 * odds.awayProb;
     const homeSurprise = homeActual - homeExpected;
-    shocks.push({ team: m.home_team, date: m.date, amount: homeSurprise * k });
+    shocks.push({ team: m.home_team, date: m.date, amount: homeSurprise * homeEffK });
 
-    // Away team
+    // Away team: opponent is home team
+    const homeElo = startingElos.get(m.home_team) ?? INITIAL_ELO;
+    const awayEffK = kBase * (1 + (homeElo - lMean) / 400);
     const awayActual = ag > hg ? 3 : ag === hg ? 1 : 0;
     const awayExpected = 3 * odds.awayProb + 1 * odds.drawProb + 0 * odds.homeProb;
     const awaySurprise = awayActual - awayExpected;
-    shocks.push({ team: m.away_team, date: m.date, amount: awaySurprise * k });
+    shocks.push({ team: m.away_team, date: m.date, amount: awaySurprise * awayEffK });
+
+    // Collect examples for interesting matches (big K difference from flat)
+    if (examples.length < 20) {
+      examples.push({
+        match: `${m.home_team} ${hg}-${ag} ${m.away_team}`,
+        date: m.date,
+        team: m.home_team,
+        opponent: m.away_team,
+        oppElo: awayElo,
+        leagueMean: lMean,
+        kFlat: kBase,
+        kWeighted: homeEffK,
+        shockFlat: homeSurprise * kBase,
+        shockWeighted: homeSurprise * homeEffK,
+      });
+      examples.push({
+        match: `${m.home_team} ${hg}-${ag} ${m.away_team}`,
+        date: m.date,
+        team: m.away_team,
+        opponent: m.home_team,
+        oppElo: homeElo,
+        leagueMean: lMean,
+        kFlat: kBase,
+        kWeighted: awayEffK,
+        shockFlat: awaySurprise * kBase,
+        shockWeighted: awaySurprise * awayEffK,
+      });
+    }
   }
-  return shocks;
+  return { shocks, examples };
 }
 
 function activeShockBoost(
@@ -594,11 +658,24 @@ async function main() {
   const pinnacleOdds = normalizeOdds(odds, true);
   console.log(`  Median: ${medianOdds.size} fixtures, Pinnacle: ${pinnacleOdds.size} fixtures`);
 
-  // Compute surprise shocks
-  console.log("Computing surprise shocks...");
-  const shocks = computeShocks(matches, medianOdds, SHOCK_K);
-  const oracleShocks = computeShocks(matches, pinnacleOdds, ORACLE_SHOCK_K);
-  console.log(`  ${shocks.length} reactive shocks (K=${SHOCK_K}), ${oracleShocks.length} oracle shocks (K=${ORACLE_SHOCK_K})`);
+  // Compute surprise shocks (opponent-strength-weighted K)
+  console.log("Computing surprise shocks (opponent-weighted K)...");
+  const { shocks, examples: reactiveExamples } = computeShocks(matches, medianOdds, SHOCK_K, startingElos, teamLeague);
+  const { shocks: oracleShocks, examples: oracleExamples } = computeShocks(matches, pinnacleOdds, ORACLE_SHOCK_K, startingElos, teamLeague);
+  console.log(`  ${shocks.length} reactive shocks (K_base=${SHOCK_K}), ${oracleShocks.length} oracle shocks (K_base=${ORACLE_SHOCK_K})`);
+
+  // Log 5 oracle shock examples: flat K vs weighted K
+  console.log("\n  Opponent-weighted shock examples (oracle, K_base=20):");
+  const sortedExamples = oracleExamples
+    .filter((e) => Math.abs(e.shockFlat) > 1) // only interesting shocks
+    .sort((a, b) => Math.abs(b.kWeighted - b.kFlat) - Math.abs(a.kWeighted - a.kFlat))
+    .slice(0, 5);
+  for (const ex of sortedExamples) {
+    const mult = ex.kWeighted / ex.kFlat;
+    console.log(
+      `  ${ex.match} (${ex.date}) → ${ex.team}: opp_elo=${ex.oppElo.toFixed(0)}, league_mean=${ex.leagueMean.toFixed(0)}, K_flat=${ex.kFlat}, K_weighted=${ex.kWeighted.toFixed(1)} (${mult.toFixed(2)}x), shock: ${ex.shockFlat.toFixed(1)} → ${ex.shockWeighted.toFixed(1)}`
+    );
+  }
 
   // Date range
   const dates = allDates(START_DATE, END_DATE);
