@@ -2,9 +2,9 @@ import { supabase } from "@/lib/supabase";
 import { TeamTable } from "./team-table";
 import type { Match, TeamRow } from "@/lib/types";
 
-// Fetch latest oracle dollar_price per team from team_prices
-async function fetchLatestPrices(): Promise<Map<string, number>> {
-  const priceMap = new Map<string, number>();
+// Fetch latest oracle dollar_price + implied_elo per team from team_prices
+async function fetchLatestPrices(): Promise<Map<string, { price: number; elo: number }>> {
+  const map = new Map<string, { price: number; elo: number }>();
 
   // team_prices has ~22k rows; paginate to get them all
   let from = 0;
@@ -13,7 +13,7 @@ async function fetchLatestPrices(): Promise<Map<string, number>> {
   while (true) {
     const { data, error } = await supabase
       .from("team_prices")
-      .select("team, date, dollar_price")
+      .select("team, date, dollar_price, implied_elo")
       .eq("model", "oracle")
       .order("date", { ascending: false })
       .range(from, from + pageSize - 1);
@@ -25,9 +25,9 @@ async function fetchLatestPrices(): Promise<Map<string, number>> {
     if (!data || data.length === 0) break;
 
     for (const row of data) {
-      // Only keep the first (most recent) price per team
-      if (!priceMap.has(row.team)) {
-        priceMap.set(row.team, row.dollar_price);
+      // Only keep the first (most recent) entry per team
+      if (!map.has(row.team)) {
+        map.set(row.team, { price: row.dollar_price, elo: row.implied_elo });
       }
     }
 
@@ -35,7 +35,7 @@ async function fetchLatestPrices(): Promise<Map<string, number>> {
     from += pageSize;
   }
 
-  return priceMap;
+  return map;
 }
 
 // Supabase caps .select() at 1000 rows by default; we need all matches + odds
@@ -109,7 +109,7 @@ function parseScore(score: string): [number, number] | null {
 function computeTeamRows(
   matches: Match[],
   oddsMap: Map<number, { homeProb: number; awayProb: number }>,
-  priceMap: Map<string, number>
+  priceMap: Map<string, { price: number; elo: number }>
 ): TeamRow[] {
   const teamStats = new Map<
     string,
@@ -172,6 +172,7 @@ function computeTeamRows(
         ? stats.impliedProbs.reduce((a, b) => a + b, 0) /
           stats.impliedProbs.length
         : 0;
+    const teamData = priceMap.get(team);
     rows.push({
       rank: 0,
       team,
@@ -182,12 +183,13 @@ function computeTeamRows(
       draws: stats.draws,
       losses: stats.losses,
       latestDate: stats.latestDate,
-      dollarPrice: priceMap.get(team) ?? null,
+      dollarPrice: teamData?.price ?? null,
+      impliedElo: teamData?.elo ?? null,
     });
   }
 
-  // Sort by implied win probability descending
-  rows.sort((a, b) => b.avgImpliedWinProb - a.avgImpliedWinProb);
+  // Sort by implied Elo descending
+  rows.sort((a, b) => (b.impliedElo ?? 0) - (a.impliedElo ?? 0));
   rows.forEach((r, i) => (r.rank = i + 1));
 
   return rows;

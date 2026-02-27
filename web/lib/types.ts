@@ -9,6 +9,7 @@ export interface TeamRow {
   losses: number;
   latestDate: string;
   dollarPrice: number | null;
+  impliedElo: number | null;
 }
 
 export interface Match {
