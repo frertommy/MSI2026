@@ -154,6 +154,7 @@ const SHOCK_HALF_LIFE = 7; // days for reactive model
 const SHOCK_K = 32;
 const ORACLE_SHOCK_K = 20; // oracle model: lighter shock
 const ORACLE_SHOCK_HALF_LIFE = 10; // oracle model: slower decay
+const PRIOR_PULL = 0.15; // Bayesian pull toward legacy Elo each BT iteration
 const CARRY_DECAY = 0.005; // 0.5%/day toward league mean
 const BATCH_SIZE = 500;
 
@@ -417,6 +418,14 @@ function bradleyTerry(
       }
     }
 
+    // Bayesian prior: pull 15% toward legacy starting Elo each iteration
+    // Prevents small-sample distortions from overriding years of historical data
+    for (const t of allTeams) {
+      const computed = ratings.get(t)!;
+      const legacy = startingElos.get(t) ?? INITIAL_ELO;
+      ratings.set(t, (1 - PRIOR_PULL) * computed + PRIOR_PULL * legacy);
+    }
+
     // Re-center around 1500
     const avg =
       [...ratings.values()].reduce((a, b) => a + b, 0) / ratings.size;
@@ -432,13 +441,16 @@ function bradleyTerry(
 // (handled inline in the main date loop)
 
 // ─── Dollar price mapping ────────────────────────────────────
-// Calibrate spread so ±300 Elo → ~$15-$85
-// logistic(1800, 1500, spread) = 85 → 100/(1+e^(-300/spread)) = 85
-// 1+e^(-300/spread) = 100/85 ≈ 1.176
-// e^(-300/spread) ≈ 0.176
-// -300/spread = ln(0.176) ≈ -1.736
-// spread ≈ 300/1.736 ≈ 172.8
-const DOLLAR_SPREAD = 173;
+// Use global center (INITIAL_ELO=1500) instead of per-league means
+// so prices reflect absolute strength, not just within-league ranking.
+// Calibrate spread so:
+//   Elo 1850 → ~$82 (top clubs: Man City, Liverpool, Barcelona)
+//   Elo 1500 → $50  (average)
+//   Elo 1250 → ~$24 (bottom-tier)
+//   Elo 1200 → ~$20
+// logistic(1850, 1500, 220) = 100/(1+e^(-350/220)) ≈ $83
+// logistic(1250, 1500, 220) = 100/(1+e^(250/220))  ≈ $24
+const DOLLAR_SPREAD = 220;
 
 // ─── Reactive model: surprise shocks ─────────────────────────
 interface Shock {
@@ -672,15 +684,14 @@ async function main() {
       }
     }
 
-    // Generate prices for each team
+    // Generate prices for each team (global center = INITIAL_ELO)
     for (const team of allTeams) {
       const league = teamLeague.get(team)!;
-      const leagueMean = leagueMeans.get(league) ?? INITIAL_ELO;
       const mInW = matchesInWindow.get(team) ?? 0;
 
       // Oracle A — smooth (median BT, no shocks)
       const eloSmooth = ratingsMedian.get(team) ?? INITIAL_ELO;
-      const priceSmooth = logistic(eloSmooth, leagueMean, DOLLAR_SPREAD);
+      const priceSmooth = logistic(eloSmooth, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "smooth",
         implied_elo: Math.round(eloSmooth * 10) / 10,
@@ -692,7 +703,7 @@ async function main() {
       // Oracle B — reactive (median BT + shock boost K=32, HL=7)
       const shockBoost = activeShockBoost(team, date, shocks, SHOCK_HALF_LIFE);
       const eloReactive = eloSmooth + shockBoost;
-      const priceReactive = logistic(eloReactive, leagueMean, DOLLAR_SPREAD);
+      const priceReactive = logistic(eloReactive, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "reactive",
         implied_elo: Math.round(eloReactive * 10) / 10,
@@ -703,7 +714,7 @@ async function main() {
 
       // Oracle C — sharp (pinnacle BT, no shocks)
       const eloSharp = ratingsPinnacle.get(team) ?? INITIAL_ELO;
-      const priceSharp = logistic(eloSharp, leagueMean, DOLLAR_SPREAD);
+      const priceSharp = logistic(eloSharp, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "sharp",
         implied_elo: Math.round(eloSharp * 10) / 10,
@@ -715,7 +726,7 @@ async function main() {
       // Oracle D — oracle (pinnacle BT + shocks K=20, HL=10)
       const oracleBoost = activeShockBoost(team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
       const eloOracle = eloSharp + oracleBoost;
-      const priceOracle = logistic(eloOracle, leagueMean, DOLLAR_SPREAD);
+      const priceOracle = logistic(eloOracle, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "oracle",
         implied_elo: Math.round(eloOracle * 10) / 10,
@@ -835,6 +846,19 @@ async function main() {
 
     console.log(
       `\n  ${model.toUpperCase()}: avg=$${avg.toFixed(2)}, daily_stdev=$${stdev.toFixed(3)}, max_move=$${maxMove.toFixed(2)}`
+    );
+  }
+
+  // Top 10 teams by oracle price (latest date)
+  const latestDate = dates[dates.length - 1];
+  const latestOracle = teamPriceRows
+    .filter((r) => r.model === "oracle" && r.date === latestDate)
+    .sort((a, b) => b.dollar_price - a.dollar_price);
+  console.log(`\nTop 10 by oracle price (${latestDate}):`);
+  for (let i = 0; i < Math.min(10, latestOracle.length); i++) {
+    const t = latestOracle[i];
+    console.log(
+      `  ${(i + 1).toString().padStart(2)}. ${t.team.padEnd(22)} Elo=${t.implied_elo.toFixed(0).padStart(5)}  $${t.dollar_price.toFixed(2)}  (${t.league})`
     );
   }
 
