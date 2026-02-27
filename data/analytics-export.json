@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-02-27T09:33:22.962Z",
+  "generated_at": "2026-02-27T10:08:28.128Z",
   "data_range": {
     "start": "2026-01-01",
     "end": "2026-02-26"
@@ -72,34 +72,34 @@
   "brier_scores": [
     {
       "model": "smooth",
-      "brier": 0.632919,
-      "brier_home": 0.204228,
-      "brier_draw": 0.216331,
-      "brier_away": 0.212361,
+      "brier": 0.627684,
+      "brier_home": 0.211096,
+      "brier_draw": 0.209703,
+      "brier_away": 0.206885,
       "n_matches": 391
     },
     {
       "model": "reactive",
-      "brier": 0.512611,
-      "brier_home": 0.145777,
-      "brier_draw": 0.21049,
-      "brier_away": 0.156345,
+      "brier": 0.530186,
+      "brier_home": 0.165226,
+      "brier_draw": 0.204416,
+      "brier_away": 0.160543,
       "n_matches": 391
     },
     {
       "model": "sharp",
-      "brier": 0.632456,
-      "brier_home": 0.204232,
-      "brier_draw": 0.216271,
-      "brier_away": 0.211953,
+      "brier": 0.627065,
+      "brier_home": 0.210943,
+      "brier_draw": 0.209668,
+      "brier_away": 0.206454,
       "n_matches": 391
     },
     {
       "model": "oracle",
-      "brier": 0.553413,
-      "brier_home": 0.166025,
-      "brier_draw": 0.213033,
-      "brier_away": 0.174355,
+      "brier": 0.563788,
+      "brier_home": 0.181346,
+      "brier_draw": 0.206657,
+      "brier_away": 0.175785,
       "n_matches": 391
     }
   ],
@@ -107,45 +107,45 @@
     {
       "model": "smooth",
       "total_matches": 391,
-      "edges_gt_3pct": 391,
-      "edges_gt_5pct": 383,
-      "edges_gt_10pct": 329,
-      "pct_gt_3": 100,
-      "pct_gt_5": 97.95,
-      "max_edge": 65.01,
+      "edges_gt_3pct": 389,
+      "edges_gt_5pct": 370,
+      "edges_gt_10pct": 255,
+      "pct_gt_3": 99.49,
+      "pct_gt_5": 94.63,
+      "max_edge": 45.51,
       "max_edge_match": "Lecce vs Inter (2026-02-21)"
     },
     {
       "model": "reactive",
       "total_matches": 391,
-      "edges_gt_3pct": 390,
-      "edges_gt_5pct": 383,
-      "edges_gt_10pct": 333,
-      "pct_gt_3": 99.74,
-      "pct_gt_5": 97.95,
-      "max_edge": 79.07,
+      "edges_gt_3pct": 384,
+      "edges_gt_5pct": 369,
+      "edges_gt_10pct": 281,
+      "pct_gt_3": 98.21,
+      "pct_gt_5": 94.37,
+      "max_edge": 55.35,
       "max_edge_match": "Valencia vs Real Madrid (2026-02-08)"
     },
     {
       "model": "sharp",
       "total_matches": 391,
-      "edges_gt_3pct": 391,
-      "edges_gt_5pct": 383,
-      "edges_gt_10pct": 328,
-      "pct_gt_3": 100,
-      "pct_gt_5": 97.95,
-      "max_edge": 65.13,
+      "edges_gt_3pct": 389,
+      "edges_gt_5pct": 370,
+      "edges_gt_10pct": 259,
+      "pct_gt_3": 99.49,
+      "pct_gt_5": 94.63,
+      "max_edge": 45.59,
       "max_edge_match": "Lecce vs Inter (2026-02-21)"
     },
     {
       "model": "oracle",
       "total_matches": 391,
-      "edges_gt_3pct": 391,
-      "edges_gt_5pct": 388,
-      "edges_gt_10pct": 322,
-      "pct_gt_3": 100,
-      "pct_gt_5": 99.23,
-      "max_edge": 73.21,
+      "edges_gt_3pct": 388,
+      "edges_gt_5pct": 370,
+      "edges_gt_10pct": 270,
+      "pct_gt_3": 99.23,
+      "pct_gt_5": 94.63,
+      "max_edge": 51.25,
       "max_edge_match": "Valencia vs Real Madrid (2026-02-08)"
     }
   ],

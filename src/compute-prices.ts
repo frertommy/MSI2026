@@ -768,7 +768,20 @@ async function main() {
             activeShockBoost(m.away_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
         }
 
-        const implied = matchProbsFromElo(homeElo, awayElo, homeAdv);
+        const raw = matchProbsFromElo(homeElo, awayElo, homeAdv);
+
+        // Blend: 70% oracle view + 30% bookmaker median
+        // Prevents extreme divergence while keeping oracle dominant
+        const ORACLE_WEIGHT = 0.7;
+        const BOOK_WEIGHT = 1 - ORACLE_WEIGHT;
+        const blendHome = ORACLE_WEIGHT * raw.homeWin + BOOK_WEIGHT * bookOdds.homeProb;
+        const blendDraw = ORACLE_WEIGHT * raw.draw + BOOK_WEIGHT * bookOdds.drawProb;
+        const blendAway = ORACLE_WEIGHT * raw.awayWin + BOOK_WEIGHT * bookOdds.awayProb;
+        // Renormalize
+        const blendTotal = blendHome + blendDraw + blendAway;
+        const calHome = blendHome / blendTotal;
+        const calDraw = blendDraw / blendTotal;
+        const calAway = blendAway / blendTotal;
 
         matchProbRows.push({
           fixture_id: m.fixture_id,
@@ -776,15 +789,15 @@ async function main() {
           date: m.date,
           home_team: m.home_team,
           away_team: m.away_team,
-          implied_home_win: Math.round(implied.homeWin * 10000) / 10000,
-          implied_draw: Math.round(implied.draw * 10000) / 10000,
-          implied_away_win: Math.round(implied.awayWin * 10000) / 10000,
+          implied_home_win: Math.round(calHome * 10000) / 10000,
+          implied_draw: Math.round(calDraw * 10000) / 10000,
+          implied_away_win: Math.round(calAway * 10000) / 10000,
           bookmaker_home_win: Math.round(bookOdds.homeProb * 10000) / 10000,
           bookmaker_draw: Math.round(bookOdds.drawProb * 10000) / 10000,
           bookmaker_away_win: Math.round(bookOdds.awayProb * 10000) / 10000,
-          edge_home: Math.round((implied.homeWin - bookOdds.homeProb) * 10000) / 10000,
-          edge_draw: Math.round((implied.draw - bookOdds.drawProb) * 10000) / 10000,
-          edge_away: Math.round((implied.awayWin - bookOdds.awayProb) * 10000) / 10000,
+          edge_home: Math.round((calHome - bookOdds.homeProb) * 10000) / 10000,
+          edge_draw: Math.round((calDraw - bookOdds.drawProb) * 10000) / 10000,
+          edge_away: Math.round((calAway - bookOdds.awayProb) * 10000) / 10000,
         });
       }
     }
@@ -862,8 +875,31 @@ async function main() {
     );
   }
 
-  // Top arb edges
-  console.log("\nTop 5 arb edges:");
+  // Edge distribution
+  console.log("\nEdge distribution (calibrated 0.7/0.3 blend):");
+  for (const model of ["smooth", "reactive", "sharp", "oracle"]) {
+    const modelRows = matchProbRows.filter((r) => r.model === model);
+    const absEdges = modelRows.flatMap((r) => [
+      Math.abs(r.edge_home),
+      Math.abs(r.edge_draw),
+      Math.abs(r.edge_away),
+    ]);
+    absEdges.sort((a, b) => a - b);
+    const mean = absEdges.reduce((s, e) => s + e, 0) / absEdges.length;
+    const med = absEdges[Math.floor(absEdges.length / 2)];
+    const max = absEdges[absEdges.length - 1];
+    const gt3 = absEdges.filter((e) => e > 0.03).length;
+    const gt5 = absEdges.filter((e) => e > 0.05).length;
+    const matchesWithEdge = modelRows.filter(
+      (r) => Math.abs(r.edge_home) > 0.03 || Math.abs(r.edge_draw) > 0.03 || Math.abs(r.edge_away) > 0.03
+    ).length;
+    console.log(
+      `  ${model.toUpperCase().padEnd(9)} mean=${(mean * 100).toFixed(2)}%  median=${(med * 100).toFixed(2)}%  max=${(max * 100).toFixed(2)}%  |  >3%: ${gt3}/${absEdges.length} outcomes  >5%: ${gt5}  |  matches w/ edge>3%: ${matchesWithEdge}/${modelRows.length} (${((matchesWithEdge / modelRows.length) * 100).toFixed(0)}%)`
+    );
+  }
+
+  // Top 5 arb edges
+  console.log("\nTop 5 edges:");
   const allEdges = matchProbRows
     .flatMap((r) => [
       { ...r, edgeType: "home", edge: Math.abs(r.edge_home) },
