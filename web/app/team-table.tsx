@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { TeamRow } from "@/lib/types";
 
 const LEAGUE_SHORT: Record<string, string> = {
@@ -59,6 +59,7 @@ export function TeamTable({
   teams: TeamRow[];
   leagues: string[];
 }) {
+  const router = useRouter();
   const [activeLeague, setActiveLeague] = useState<string>("All");
 
   const filtered =
@@ -119,61 +120,59 @@ export function TeamTable({
           </thead>
           <tbody>
             {ranked.map((t) => (
-              <Link
+              <tr
                 key={t.team}
-                href={`/compare?team=${encodeURIComponent(t.team)}`}
-                className="contents"
+                onClick={() => router.push(`/compare?team=${encodeURIComponent(t.team)}`)}
+                className="border-b border-border/50 hover:bg-surface-hover cursor-pointer transition-colors group"
               >
-                <tr className="border-b border-border/50 hover:bg-surface-hover cursor-pointer transition-colors group">
-                  <td className="py-2 pr-3 text-right font-mono text-muted">
-                    {t.rank}
-                  </td>
-                  <td className="py-2 px-3 text-left font-semibold text-foreground group-hover:text-accent-green transition-colors">
-                    {t.team}
-                  </td>
-                  <td
-                    className={`py-2 px-3 text-left text-xs font-bold ${
-                      LEAGUE_COLOR[t.league] || "text-muted"
-                    }`}
-                  >
-                    {LEAGUE_SHORT[t.league] || t.league}
-                  </td>
-                  <td
-                    className={`py-2 px-3 text-right font-mono font-bold ${priceColor(
-                      t.dollarPrice
-                    )}`}
-                  >
-                    {t.dollarPrice !== null
-                      ? `$${t.dollarPrice.toFixed(2)}`
-                      : "---"}
-                  </td>
-                  <td
-                    className={`py-2 px-3 text-right font-mono font-bold ${probColor(
-                      t.avgImpliedWinProb
-                    )}`}
-                  >
-                    {t.avgImpliedWinProb > 0
-                      ? formatProb(t.avgImpliedWinProb)
-                      : "---"}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono text-muted">
-                    {t.played}
-                  </td>
-                  <td className="py-2 px-3 text-center font-mono">
-                    <span className="text-accent-green">{t.wins}</span>
-                    <span className="text-muted">-</span>
-                    <span className="text-accent-amber">{t.draws}</span>
-                    <span className="text-muted">-</span>
-                    <span className="text-accent-red">{t.losses}</span>
-                  </td>
-                  <td className="py-2 px-3 flex items-center justify-center">
-                    {wdlBar(t.wins, t.draws, t.losses)}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono text-xs text-muted">
-                    {t.latestDate}
-                  </td>
-                </tr>
-              </Link>
+                <td className="py-2 pr-3 text-right font-mono text-muted">
+                  {t.rank}
+                </td>
+                <td className="py-2 px-3 text-left font-semibold text-foreground group-hover:text-accent-green transition-colors">
+                  {t.team}
+                </td>
+                <td
+                  className={`py-2 px-3 text-left text-xs font-bold ${
+                    LEAGUE_COLOR[t.league] || "text-muted"
+                  }`}
+                >
+                  {LEAGUE_SHORT[t.league] || t.league}
+                </td>
+                <td
+                  className={`py-2 px-3 text-right font-mono font-bold ${priceColor(
+                    t.dollarPrice
+                  )}`}
+                >
+                  {t.dollarPrice !== null
+                    ? `$${t.dollarPrice.toFixed(2)}`
+                    : "---"}
+                </td>
+                <td
+                  className={`py-2 px-3 text-right font-mono font-bold ${probColor(
+                    t.avgImpliedWinProb
+                  )}`}
+                >
+                  {t.avgImpliedWinProb > 0
+                    ? formatProb(t.avgImpliedWinProb)
+                    : "---"}
+                </td>
+                <td className="py-2 px-3 text-right font-mono text-muted">
+                  {t.played}
+                </td>
+                <td className="py-2 px-3 text-center font-mono">
+                  <span className="text-accent-green">{t.wins}</span>
+                  <span className="text-muted">-</span>
+                  <span className="text-accent-amber">{t.draws}</span>
+                  <span className="text-muted">-</span>
+                  <span className="text-accent-red">{t.losses}</span>
+                </td>
+                <td className="py-2 px-3 flex items-center justify-center">
+                  {wdlBar(t.wins, t.draws, t.losses)}
+                </td>
+                <td className="py-2 px-3 text-right font-mono text-xs text-muted">
+                  {t.latestDate}
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>
