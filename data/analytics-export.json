@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-02-27T10:47:18.629Z",
+  "generated_at": "2026-02-27T12:44:55.146Z",
   "data_range": {
     "start": "2026-01-01",
     "end": "2026-02-26"
   },
   "totals": {
     "teams": 96,
-    "matches": 391,
-    "price_rows": 21888,
+    "matches": 463,
+    "price_rows": 22272,
     "prediction_rows": 1564,
     "models": [
       "smooth",
@@ -26,47 +26,47 @@
   "volatility": [
     {
       "model": "smooth",
-      "avg_daily_change": 0.44748,
-      "daily_stdev": 1.320019,
-      "match_day_vol": 2.437972,
-      "non_match_day_vol": 0.112703,
-      "vol_ratio": 21.6318,
-      "n_changes": 5376,
-      "n_match_day": 774,
-      "n_non_match_day": 4602
+      "avg_daily_change": 0.440314,
+      "daily_stdev": 1.309491,
+      "match_day_vol": 2.413427,
+      "non_match_day_vol": 0.111322,
+      "vol_ratio": 21.6797,
+      "n_changes": 5472,
+      "n_match_day": 782,
+      "n_non_match_day": 4690
     },
     {
       "model": "reactive",
-      "avg_daily_change": 0.868929,
-      "daily_stdev": 1.624198,
-      "match_day_vol": 3.79584,
-      "non_match_day_vol": 0.376658,
-      "vol_ratio": 10.0777,
-      "n_changes": 5376,
-      "n_match_day": 774,
-      "n_non_match_day": 4602
+      "avg_daily_change": 0.859066,
+      "daily_stdev": 1.611797,
+      "match_day_vol": 3.760729,
+      "non_match_day_vol": 0.375249,
+      "vol_ratio": 10.0219,
+      "n_changes": 5472,
+      "n_match_day": 782,
+      "n_non_match_day": 4690
     },
     {
       "model": "sharp",
-      "avg_daily_change": 0.446473,
-      "daily_stdev": 1.304476,
-      "match_day_vol": 2.433721,
-      "non_match_day_vol": 0.112243,
-      "vol_ratio": 21.6827,
-      "n_changes": 5376,
-      "n_match_day": 774,
-      "n_non_match_day": 4602
+      "avg_daily_change": 0.439322,
+      "daily_stdev": 1.294093,
+      "match_day_vol": 2.40922,
+      "non_match_day_vol": 0.110866,
+      "vol_ratio": 21.731,
+      "n_changes": 5472,
+      "n_match_day": 782,
+      "n_non_match_day": 4690
     },
     {
       "model": "oracle",
-      "avg_daily_change": 0.595781,
-      "daily_stdev": 1.299329,
-      "match_day_vol": 2.755349,
-      "non_match_day_vol": 0.232568,
-      "vol_ratio": 11.8475,
-      "n_changes": 5376,
-      "n_match_day": 774,
-      "n_non_match_day": 4602
+      "avg_daily_change": 0.588518,
+      "daily_stdev": 1.289129,
+      "match_day_vol": 2.729373,
+      "non_match_day_vol": 0.231557,
+      "vol_ratio": 11.7871,
+      "n_changes": 5472,
+      "n_match_day": 782,
+      "n_non_match_day": 4690
     }
   ],
   "brier_scores": [
@@ -153,140 +153,140 @@
     {
       "league": "Premier League",
       "model": "smooth",
-      "avg_correlation": -0.026231,
+      "avg_correlation": -0.026236,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "reactive",
-      "avg_correlation": -0.028047,
+      "avg_correlation": -0.028055,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "sharp",
-      "avg_correlation": -0.026449,
+      "avg_correlation": -0.026454,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "oracle",
-      "avg_correlation": -0.018673,
+      "avg_correlation": -0.018681,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "smooth",
-      "avg_correlation": -0.017388,
+      "avg_correlation": -0.01739,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "reactive",
-      "avg_correlation": -0.031886,
+      "avg_correlation": -0.031902,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "sharp",
-      "avg_correlation": -0.019149,
+      "avg_correlation": -0.019151,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "oracle",
-      "avg_correlation": -0.016666,
+      "avg_correlation": -0.016685,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Bundesliga",
       "model": "smooth",
-      "avg_correlation": -0.021015,
+      "avg_correlation": -0.021016,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "reactive",
-      "avg_correlation": -0.038285,
+      "avg_correlation": -0.03827,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "sharp",
-      "avg_correlation": -0.022955,
+      "avg_correlation": -0.022957,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "oracle",
-      "avg_correlation": -0.0282,
+      "avg_correlation": -0.028173,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Serie A",
       "model": "smooth",
-      "avg_correlation": -0.034222,
+      "avg_correlation": -0.034223,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "reactive",
-      "avg_correlation": -0.012827,
+      "avg_correlation": -0.012846,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "sharp",
-      "avg_correlation": -0.030951,
+      "avg_correlation": -0.030952,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "oracle",
-      "avg_correlation": -0.018437,
+      "avg_correlation": -0.018432,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Ligue 1",
       "model": "smooth",
-      "avg_correlation": -0.028278,
+      "avg_correlation": -0.028281,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "reactive",
-      "avg_correlation": -0.026261,
+      "avg_correlation": -0.026252,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "sharp",
-      "avg_correlation": -0.029315,
+      "avg_correlation": -0.029317,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "oracle",
-      "avg_correlation": -0.011585,
+      "avg_correlation": -0.01159,
       "n_pairs": 153,
       "n_teams": 18
     }
@@ -295,27 +295,27 @@
     {
       "team": "Arsenal",
       "league": "Premier League",
-      "latest_oracle_price": 79.25
+      "latest_oracle_price": 79.08
     },
     {
       "team": "Inter",
       "league": "Serie A",
-      "latest_oracle_price": 77.6
+      "latest_oracle_price": 77.19
     },
     {
       "team": "Manchester City",
       "league": "Premier League",
-      "latest_oracle_price": 77.33
+      "latest_oracle_price": 77.07
     },
     {
       "team": "Bayern München",
       "league": "Bundesliga",
-      "latest_oracle_price": 73.41
+      "latest_oracle_price": 73.03
     },
     {
       "team": "Manchester United",
       "league": "Premier League",
-      "latest_oracle_price": 72.03
+      "latest_oracle_price": 71.66
     }
   ],
   "top5_daily_prices": [
@@ -608,6 +608,11 @@
             "date": "2026-02-26",
             "dollar_price": 77.76,
             "implied_elo": 1775.4
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.69,
+            "implied_elo": 1774.5
           }
         ],
         "reactive": [
@@ -895,6 +900,11 @@
             "date": "2026-02-26",
             "dollar_price": 79.86,
             "implied_elo": 1803
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 79.6,
+            "implied_elo": 1799.5
           }
         ],
         "sharp": [
@@ -1182,6 +1192,11 @@
             "date": "2026-02-26",
             "dollar_price": 77.71,
             "implied_elo": 1774.7
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.63,
+            "implied_elo": 1773.8
           }
         ],
         "oracle": [
@@ -1469,6 +1484,11 @@
             "date": "2026-02-26",
             "dollar_price": 79.25,
             "implied_elo": 1794.8
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 79.08,
+            "implied_elo": 1792.6
           }
         ]
       }
@@ -1762,6 +1782,11 @@
             "date": "2026-02-26",
             "dollar_price": 72.62,
             "implied_elo": 1714.6
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 72.52,
+            "implied_elo": 1713.5
           }
         ],
         "reactive": [
@@ -2049,6 +2074,11 @@
             "date": "2026-02-26",
             "dollar_price": 78.42,
             "implied_elo": 1783.8
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.82,
+            "implied_elo": 1776.2
           }
         ],
         "sharp": [
@@ -2336,6 +2366,11 @@
             "date": "2026-02-26",
             "dollar_price": 72.46,
             "implied_elo": 1712.8
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 72.36,
+            "implied_elo": 1711.7
           }
         ],
         "oracle": [
@@ -2623,6 +2658,11 @@
             "date": "2026-02-26",
             "dollar_price": 77.6,
             "implied_elo": 1773.4
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.19,
+            "implied_elo": 1768.2
           }
         ]
       }
@@ -2916,6 +2956,11 @@
             "date": "2026-02-26",
             "dollar_price": 74.14,
             "implied_elo": 1731.7
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 74.08,
+            "implied_elo": 1731
           }
         ],
         "reactive": [
@@ -3203,6 +3248,11 @@
             "date": "2026-02-26",
             "dollar_price": 77.95,
             "implied_elo": 1777.8
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.55,
+            "implied_elo": 1772.7
           }
         ],
         "sharp": [
@@ -3490,6 +3540,11 @@
             "date": "2026-02-26",
             "dollar_price": 74.13,
             "implied_elo": 1731.6
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 74.07,
+            "implied_elo": 1730.9
           }
         ],
         "oracle": [
@@ -3777,6 +3832,11 @@
             "date": "2026-02-26",
             "dollar_price": 77.33,
             "implied_elo": 1770
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 77.07,
+            "implied_elo": 1766.7
           }
         ]
       }
@@ -4070,6 +4130,11 @@
             "date": "2026-02-26",
             "dollar_price": 68.91,
             "implied_elo": 1675.1
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 68.8,
+            "implied_elo": 1674
           }
         ],
         "reactive": [
@@ -4357,6 +4422,11 @@
             "date": "2026-02-26",
             "dollar_price": 74.01,
             "implied_elo": 1730.2
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 73.46,
+            "implied_elo": 1724
           }
         ],
         "sharp": [
@@ -4644,6 +4714,11 @@
             "date": "2026-02-26",
             "dollar_price": 68.89,
             "implied_elo": 1674.9
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 68.79,
+            "implied_elo": 1673.9
           }
         ],
         "oracle": [
@@ -4931,6 +5006,11 @@
             "date": "2026-02-26",
             "dollar_price": 73.41,
             "implied_elo": 1723.4
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 73.03,
+            "implied_elo": 1719.1
           }
         ]
       }
@@ -5224,6 +5304,11 @@
             "date": "2026-02-26",
             "dollar_price": 66.61,
             "implied_elo": 1651.9
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 66.57,
+            "implied_elo": 1651.6
           }
         ],
         "reactive": [
@@ -5511,6 +5596,11 @@
             "date": "2026-02-26",
             "dollar_price": 72.82,
             "implied_elo": 1716.9
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 72.24,
+            "implied_elo": 1710.4
           }
         ],
         "sharp": [
@@ -5798,6 +5888,11 @@
             "date": "2026-02-26",
             "dollar_price": 66.62,
             "implied_elo": 1652.1
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 66.59,
+            "implied_elo": 1651.8
           }
         ],
         "oracle": [
@@ -6085,6 +6180,11 @@
             "date": "2026-02-26",
             "dollar_price": 72.03,
             "implied_elo": 1708.2
+          },
+          {
+            "date": "2026-02-27",
+            "dollar_price": 71.66,
+            "implied_elo": 1704.1
           }
         ]
       }
