@@ -2,11 +2,11 @@ import { supabase } from "@/lib/supabase";
 import { TeamTable } from "./team-table";
 import type { Match, TeamRow } from "@/lib/types";
 
-// Fetch latest smooth dollar_price per team from team_prices
+// Fetch latest oracle dollar_price per team from team_prices
 async function fetchLatestPrices(): Promise<Map<string, number>> {
   const priceMap = new Map<string, number>();
 
-  // team_prices has ~16k rows; paginate to get them all
+  // team_prices has ~22k rows; paginate to get them all
   let from = 0;
   const pageSize = 1000;
 
@@ -14,7 +14,7 @@ async function fetchLatestPrices(): Promise<Map<string, number>> {
     const { data, error } = await supabase
       .from("team_prices")
       .select("team, date, dollar_price")
-      .eq("model", "smooth")
+      .eq("model", "oracle")
       .order("date", { ascending: false })
       .range(from, from + pageSize - 1);
 
@@ -215,10 +215,18 @@ export default async function Home() {
               MSI 2026
             </h1>
           </div>
-          <span className="text-xs text-muted font-mono">
-            {teams.length} teams &middot; {matches.length} matches &middot;{" "}
-            {oddsMap.size} odds fixtures
-          </span>
+          <div className="flex items-center gap-4">
+            <a
+              href="/analytics"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Analytics &rarr;
+            </a>
+            <span className="text-xs text-muted font-mono">
+              {teams.length} teams &middot; {matches.length} matches &middot;{" "}
+              {oddsMap.size} odds fixtures
+            </span>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">

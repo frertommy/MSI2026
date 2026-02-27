@@ -152,6 +152,8 @@ const WINDOW_DAYS = 60;
 const DECAY_HALF_LIFE = 14; // days
 const SHOCK_HALF_LIFE = 7; // days for reactive model
 const SHOCK_K = 32;
+const ORACLE_SHOCK_K = 20; // oracle model: lighter shock
+const ORACLE_SHOCK_HALF_LIFE = 10; // oracle model: slower decay
 const CARRY_DECAY = 0.005; // 0.5%/day toward league mean
 const BATCH_SIZE = 500;
 
@@ -447,7 +449,8 @@ interface Shock {
 
 function computeShocks(
   matches: Match[],
-  normalizedOdds: Map<number, NormalizedOdds>
+  normalizedOdds: Map<number, NormalizedOdds>,
+  k: number
 ): Shock[] {
   const shocks: Shock[] = [];
   for (const m of matches) {
@@ -463,13 +466,13 @@ function computeShocks(
     const homeActual = hg > ag ? 3 : hg === ag ? 1 : 0;
     const homeExpected = 3 * odds.homeProb + 1 * odds.drawProb + 0 * odds.awayProb;
     const homeSurprise = homeActual - homeExpected;
-    shocks.push({ team: m.home_team, date: m.date, amount: homeSurprise * SHOCK_K });
+    shocks.push({ team: m.home_team, date: m.date, amount: homeSurprise * k });
 
     // Away team
     const awayActual = ag > hg ? 3 : ag === hg ? 1 : 0;
     const awayExpected = 3 * odds.awayProb + 1 * odds.drawProb + 0 * odds.homeProb;
     const awaySurprise = awayActual - awayExpected;
-    shocks.push({ team: m.away_team, date: m.date, amount: awaySurprise * SHOCK_K });
+    shocks.push({ team: m.away_team, date: m.date, amount: awaySurprise * k });
   }
   return shocks;
 }
@@ -477,7 +480,8 @@ function computeShocks(
 function activeShockBoost(
   team: string,
   date: string,
-  shocks: Shock[]
+  shocks: Shock[],
+  halfLife: number
 ): number {
   let total = 0;
   for (const s of shocks) {
@@ -485,7 +489,7 @@ function activeShockBoost(
     if (s.date > date) continue;
     const age = daysBetween(s.date, date);
     if (age < 0) continue;
-    total += s.amount * Math.pow(0.5, age / SHOCK_HALF_LIFE);
+    total += s.amount * Math.pow(0.5, age / halfLife);
   }
   return total;
 }
@@ -578,10 +582,11 @@ async function main() {
   const pinnacleOdds = normalizeOdds(odds, true);
   console.log(`  Median: ${medianOdds.size} fixtures, Pinnacle: ${pinnacleOdds.size} fixtures`);
 
-  // Compute surprise shocks for reactive model
+  // Compute surprise shocks
   console.log("Computing surprise shocks...");
-  const shocks = computeShocks(matches, medianOdds);
-  console.log(`  ${shocks.length} shocks`);
+  const shocks = computeShocks(matches, medianOdds, SHOCK_K);
+  const oracleShocks = computeShocks(matches, pinnacleOdds, ORACLE_SHOCK_K);
+  console.log(`  ${shocks.length} reactive shocks (K=${SHOCK_K}), ${oracleShocks.length} oracle shocks (K=${ORACLE_SHOCK_K})`);
 
   // Date range
   const dates = allDates(START_DATE, END_DATE);
@@ -684,8 +689,8 @@ async function main() {
         matches_in_window: mInW,
       });
 
-      // Oracle B — reactive (median BT + shock boost)
-      const shockBoost = activeShockBoost(team, date, shocks);
+      // Oracle B — reactive (median BT + shock boost K=32, HL=7)
+      const shockBoost = activeShockBoost(team, date, shocks, SHOCK_HALF_LIFE);
       const eloReactive = eloSmooth + shockBoost;
       const priceReactive = logistic(eloReactive, leagueMean, DOLLAR_SPREAD);
       teamPriceRows.push({
@@ -706,6 +711,18 @@ async function main() {
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
       });
+
+      // Oracle D — oracle (pinnacle BT + shocks K=20, HL=10)
+      const oracleBoost = activeShockBoost(team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
+      const eloOracle = eloSharp + oracleBoost;
+      const priceOracle = logistic(eloOracle, leagueMean, DOLLAR_SPREAD);
+      teamPriceRows.push({
+        team, league, date, model: "oracle",
+        implied_elo: Math.round(eloOracle * 10) / 10,
+        dollar_price: Math.round(priceOracle * 100) / 100,
+        confidence: Math.min(1, mInW / 10),
+        matches_in_window: mInW,
+      });
     }
 
     // Match probabilities for matches on this date
@@ -714,7 +731,7 @@ async function main() {
       const bookOdds = medianOdds.get(m.fixture_id);
       if (!bookOdds) continue;
 
-      for (const model of ["smooth", "reactive", "sharp"] as const) {
+      for (const model of ["smooth", "reactive", "sharp", "oracle"] as const) {
         let homeElo: number, awayElo: number;
 
         if (model === "smooth") {
@@ -723,13 +740,21 @@ async function main() {
         } else if (model === "reactive") {
           homeElo =
             (ratingsMedian.get(m.home_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.home_team, date, shocks);
+            activeShockBoost(m.home_team, date, shocks, SHOCK_HALF_LIFE);
           awayElo =
             (ratingsMedian.get(m.away_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.away_team, date, shocks);
-        } else {
+            activeShockBoost(m.away_team, date, shocks, SHOCK_HALF_LIFE);
+        } else if (model === "sharp") {
           homeElo = ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO;
           awayElo = ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO;
+        } else {
+          // oracle: pinnacle BT + oracle shocks
+          homeElo =
+            (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) +
+            activeShockBoost(m.home_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
+          awayElo =
+            (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) +
+            activeShockBoost(m.away_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
         }
 
         const implied = matchProbsFromElo(homeElo, awayElo, homeAdv);
@@ -781,7 +806,7 @@ async function main() {
   console.log(`Teams: ${allTeams.size}`);
   console.log(`Date range: ${START_DATE} → ${END_DATE} (${dates.length} days)`);
 
-  for (const model of ["smooth", "reactive", "sharp"]) {
+  for (const model of ["smooth", "reactive", "sharp", "oracle"]) {
     const modelPrices = teamPriceRows.filter((r) => r.model === model);
     const prices = modelPrices.map((r) => r.dollar_price);
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;

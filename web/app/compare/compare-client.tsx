@@ -46,12 +46,14 @@ const MODEL_COLORS: Record<string, string> = {
   smooth: "#00e676",
   reactive: "#ffc107",
   sharp: "#ff1744",
+  oracle: "#ffffff",
 };
 
 const MODEL_LABELS: Record<string, string> = {
   smooth: "Smooth",
   reactive: "Reactive",
   sharp: "Sharp",
+  oracle: "Oracle",
 };
 
 const TIME_RANGES = [
@@ -70,6 +72,7 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
     smooth: true,
     reactive: true,
     sharp: true,
+    oracle: true,
   });
   const [timeRange, setTimeRange] = useState(999);
 
@@ -142,10 +145,10 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
   const filteredPrices = prices.filter((p) => p.date >= startDate);
   const filteredMatchDates = matchDates.filter((m) => m.date >= startDate);
 
-  // Build chart data: one row per date with smooth/reactive/sharp columns
+  // Build chart data: one row per date with model columns
   const dateMap = new Map<
     string,
-    { date: string; smooth?: number; reactive?: number; sharp?: number }
+    { date: string; smooth?: number; reactive?: number; sharp?: number; oracle?: number }
   >();
   for (const p of filteredPrices) {
     if (!dateMap.has(p.date)) dateMap.set(p.date, { date: p.date });
@@ -153,6 +156,7 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
     if (p.model === "smooth") entry.smooth = p.dollar_price;
     if (p.model === "reactive") entry.reactive = p.dollar_price;
     if (p.model === "sharp") entry.sharp = p.dollar_price;
+    if (p.model === "oracle") entry.oracle = p.dollar_price;
   }
   const chartData = [...dateMap.values()].sort((a, b) =>
     a.date.localeCompare(b.date)
@@ -182,11 +186,11 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
     return { stdev, max, current, change };
   };
 
-  // Arb edge chart data
+  // Arb edge chart data (using oracle model)
   const arbData = filteredMatchDates
     .map((m) => {
       const probs = matchProbs.filter(
-        (p) => p.date === m.date && p.model === "sharp"
+        (p) => p.date === m.date && p.model === "oracle"
       );
       if (probs.length === 0) return null;
       const prob = probs[0];
@@ -237,7 +241,7 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
 
         {/* Model toggles */}
         <div className="flex gap-2 ml-auto">
-          {(["smooth", "reactive", "sharp"] as const).map((model) => (
+          {(["smooth", "reactive", "sharp", "oracle"] as const).map((model) => (
             <button
               key={model}
               onClick={() =>
@@ -352,13 +356,23 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
                     name="sharp"
                   />
                 )}
+                {activeModels.oracle && (
+                  <Line
+                    type="monotone"
+                    dataKey="oracle"
+                    stroke={MODEL_COLORS.oracle}
+                    dot={false}
+                    strokeWidth={2.5}
+                    name="oracle"
+                  />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
 
           {/* Volatility stats */}
-          <div className="grid grid-cols-3 gap-4">
-            {(["smooth", "reactive", "sharp"] as const).map((model) => {
+          <div className="grid grid-cols-4 gap-4">
+            {(["smooth", "reactive", "sharp", "oracle"] as const).map((model) => {
               const stats = volStats(model);
               return (
                 <div
@@ -419,7 +433,7 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
           {arbData.length > 0 && (
             <div className="border border-border rounded-lg p-4 bg-surface">
               <h2 className="text-xs font-bold uppercase tracking-wider text-muted mb-4">
-                Sharp Edge vs Bookmakers — {selectedTeam}
+                Oracle Edge vs Bookmakers — {selectedTeam}
               </h2>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={arbData}>
