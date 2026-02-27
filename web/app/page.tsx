@@ -1,99 +1,189 @@
 import { supabase } from "@/lib/supabase";
+import { TeamTable } from "./team-table";
+import type { Match, TeamRow } from "@/lib/types";
 
-interface LeagueSummary {
-  league: string;
-  matchCount: number;
-  latestDate: string;
-}
-
-async function getLeagueSummaries(): Promise<LeagueSummary[]> {
+// Supabase caps .select() at 1000 rows by default; we need all matches + odds
+async function fetchAllMatches(): Promise<Match[]> {
   const { data, error } = await supabase
     .from("matches")
-    .select("league, date");
+    .select("fixture_id, date, league, home_team, away_team, score, status")
+    .order("date", { ascending: true });
 
   if (error) {
-    console.error("Failed to fetch matches:", error.message);
+    console.error("matches fetch error:", error.message);
     return [];
   }
-
-  // Group by league
-  const leagueMap = new Map<
-    string,
-    { count: number; latestDate: string }
-  >();
-
-  for (const row of data) {
-    const existing = leagueMap.get(row.league);
-    if (existing) {
-      existing.count++;
-      if (row.date > existing.latestDate) existing.latestDate = row.date;
-    } else {
-      leagueMap.set(row.league, { count: 1, latestDate: row.date });
-    }
-  }
-
-  return Array.from(leagueMap.entries())
-    .map(([league, { count, latestDate }]) => ({
-      league,
-      matchCount: count,
-      latestDate,
-    }))
-    .sort((a, b) => b.matchCount - a.matchCount);
+  return data ?? [];
 }
 
-export const revalidate = 60; // revalidate every 60 seconds
+// Fetch odds — only closest-to-kickoff snapshot (days_before_kickoff = 1) to keep it manageable
+async function fetchClosingOdds(): Promise<
+  Map<number, { homeProb: number; awayProb: number }>
+> {
+  const map = new Map<number, { homeProb: number; awayProb: number }>();
+
+  // Paginate — table has ~28k rows
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("odds_snapshots")
+      .select("fixture_id, home_odds, away_odds, days_before_kickoff")
+      .eq("days_before_kickoff", 1)
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.error("odds fetch error:", error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+
+    for (const row of data) {
+      if (!row.home_odds || !row.away_odds || row.home_odds <= 0 || row.away_odds <= 0) continue;
+
+      const homeProb = 1 / row.home_odds;
+      const awayProb = 1 / row.away_odds;
+
+      const existing = map.get(row.fixture_id);
+      if (existing) {
+        // Average across bookmakers
+        existing.homeProb = (existing.homeProb + homeProb) / 2;
+        existing.awayProb = (existing.awayProb + awayProb) / 2;
+      } else {
+        map.set(row.fixture_id, { homeProb, awayProb });
+      }
+    }
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return map;
+}
+
+function parseScore(score: string): [number, number] | null {
+  const parts = score.split("-");
+  if (parts.length !== 2) return null;
+  const h = parseInt(parts[0].trim());
+  const a = parseInt(parts[1].trim());
+  if (isNaN(h) || isNaN(a)) return null;
+  return [h, a];
+}
+
+function computeTeamRows(
+  matches: Match[],
+  oddsMap: Map<number, { homeProb: number; awayProb: number }>
+): TeamRow[] {
+  const teamStats = new Map<
+    string,
+    {
+      league: string;
+      played: number;
+      wins: number;
+      draws: number;
+      losses: number;
+      impliedProbs: number[];
+      latestDate: string;
+    }
+  >();
+
+  function getOrCreate(team: string, league: string) {
+    if (!teamStats.has(team)) {
+      teamStats.set(team, {
+        league,
+        played: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        impliedProbs: [],
+        latestDate: "",
+      });
+    }
+    return teamStats.get(team)!;
+  }
+
+  for (const m of matches) {
+    const parsed = parseScore(m.score);
+    if (!parsed) continue;
+    const [hg, ag] = parsed;
+
+    const odds = oddsMap.get(m.fixture_id);
+
+    // Home team
+    const home = getOrCreate(m.home_team, m.league);
+    home.played++;
+    if (m.date > home.latestDate) home.latestDate = m.date;
+    if (hg > ag) home.wins++;
+    else if (hg === ag) home.draws++;
+    else home.losses++;
+    if (odds) home.impliedProbs.push(odds.homeProb);
+
+    // Away team
+    const away = getOrCreate(m.away_team, m.league);
+    away.played++;
+    if (m.date > away.latestDate) away.latestDate = m.date;
+    if (ag > hg) away.wins++;
+    else if (ag === hg) away.draws++;
+    else away.losses++;
+    if (odds) away.impliedProbs.push(odds.awayProb);
+  }
+
+  const rows: TeamRow[] = [];
+  for (const [team, stats] of teamStats) {
+    const avgProb =
+      stats.impliedProbs.length > 0
+        ? stats.impliedProbs.reduce((a, b) => a + b, 0) /
+          stats.impliedProbs.length
+        : 0;
+    rows.push({
+      rank: 0,
+      team,
+      league: stats.league,
+      avgImpliedWinProb: avgProb,
+      played: stats.played,
+      wins: stats.wins,
+      draws: stats.draws,
+      losses: stats.losses,
+      latestDate: stats.latestDate,
+    });
+  }
+
+  // Sort by implied win probability descending
+  rows.sort((a, b) => b.avgImpliedWinProb - a.avgImpliedWinProb);
+  rows.forEach((r, i) => (r.rank = i + 1));
+
+  return rows;
+}
+
+export const revalidate = 300; // revalidate every 5 min
 
 export default async function Home() {
-  const leagues = await getLeagueSummaries();
-  const totalMatches = leagues.reduce((sum, l) => sum + l.matchCount, 0);
+  const [matches, oddsMap] = await Promise.all([
+    fetchAllMatches(),
+    fetchClosingOdds(),
+  ]);
+
+  const teams = computeTeamRows(matches, oddsMap);
+  const leagues = [...new Set(teams.map((t) => t.league))].sort();
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <main className="mx-auto max-w-3xl px-6 py-16">
-        <header className="mb-12">
-          <h1 className="text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-            MSI 2026
-          </h1>
-          <p className="mt-2 text-lg text-zinc-500 dark:text-zinc-400">
-            Football match intelligence &mdash; {totalMatches} matches across{" "}
-            {leagues.length} leagues
-          </p>
-        </header>
-
-        <section>
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-            Leagues
-          </h2>
-          <div className="grid gap-4">
-            {leagues.map((league) => (
-              <div
-                key={league.league}
-                className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"
-              >
-                <div>
-                  <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                    {league.league}
-                  </h3>
-                  <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                    Latest: {league.latestDate}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                    {league.matchCount} matches
-                  </span>
-                </div>
-              </div>
-            ))}
+    <div className="min-h-screen bg-background">
+      <header className="border-b border-border px-6 py-4">
+        <div className="mx-auto max-w-7xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />
+            <h1 className="text-lg font-bold tracking-wider text-foreground uppercase">
+              MSI 2026
+            </h1>
           </div>
-        </section>
-
-        {leagues.length === 0 && (
-          <div className="mt-8 rounded-xl border border-yellow-200 bg-yellow-50 p-6 text-center text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-200">
-            No matches found. Make sure the database is populated and the
-            Supabase environment variables are set.
+          <div className="text-xs text-muted font-mono">
+            {teams.length} teams &middot; {matches.length} matches &middot;{" "}
+            {oddsMap.size} odds fixtures
           </div>
-        )}
+        </div>
+      </header>
+      <main className="mx-auto max-w-7xl px-6 py-6">
+        <TeamTable teams={teams} leagues={leagues} />
       </main>
     </div>
   );
