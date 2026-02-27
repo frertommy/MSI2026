@@ -221,6 +221,12 @@ export default async function Home() {
           </div>
           <div className="flex items-center gap-4">
             <a
+              href="/matches"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Matches &rarr;
+            </a>
+            <a
               href="/analytics"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
