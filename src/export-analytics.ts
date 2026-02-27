@@ -331,10 +331,161 @@ async function main() {
     top5_daily_prices.push(teamSeries);
   }
 
+  // ─── 6. Price impact analysis ────────────────────────
+  console.log("Computing price impact analysis...");
+
+  // Build oracle price lookup: team → date → dollar_price
+  const oraclePriceByDate = new Map<string, Map<string, number>>();
+  for (const [team, rows] of oracleTeam) {
+    const dateMap = new Map<string, number>();
+    for (const r of rows) dateMap.set(r.date, r.dollar_price);
+    oraclePriceByDate.set(team, dateMap);
+  }
+
+  // Get sorted unique dates for finding day before/after
+  const allDates = [...new Set(prices.filter(p => p.model === "oracle").map(p => p.date))].sort();
+  const dateIndex = new Map<string, number>();
+  allDates.forEach((d, i) => dateIndex.set(d, i));
+
+  function getAdjacentPrice(team: string, matchDate: string, offset: number): number | null {
+    const idx = dateIndex.get(matchDate);
+    if (idx === undefined) return null;
+    const targetIdx = idx + offset;
+    if (targetIdx < 0 || targetIdx >= allDates.length) return null;
+    const targetDate = allDates[targetIdx];
+    return oraclePriceByDate.get(team)?.get(targetDate) ?? null;
+  }
+
+  interface PriceImpactEntry {
+    team: string;
+    opponent: string;
+    date: string;
+    league: string;
+    result: "win" | "draw" | "loss";
+    score: string;
+    price_before: number;
+    price_after: number;
+    delta: number;
+    abs_delta: number;
+    home_away: "home" | "away";
+  }
+
+  const allImpacts: PriceImpactEntry[] = [];
+
+  for (const m of matches) {
+    const sc = parseScore(m.score);
+    if (!sc) continue;
+    const [hg, ag] = sc;
+
+    // Home team
+    const homeBefore = getAdjacentPrice(m.home_team, m.date, -1);
+    const homeAfter = getAdjacentPrice(m.home_team, m.date, 1);
+    if (homeBefore !== null && homeAfter !== null) {
+      const delta = homeAfter - homeBefore;
+      const result: "win" | "draw" | "loss" = hg > ag ? "win" : hg === ag ? "draw" : "loss";
+      allImpacts.push({
+        team: m.home_team,
+        opponent: m.away_team,
+        date: m.date,
+        league: m.league,
+        result,
+        score: m.score,
+        price_before: homeBefore,
+        price_after: homeAfter,
+        delta,
+        abs_delta: Math.abs(delta),
+        home_away: "home",
+      });
+    }
+
+    // Away team
+    const awayBefore = getAdjacentPrice(m.away_team, m.date, -1);
+    const awayAfter = getAdjacentPrice(m.away_team, m.date, 1);
+    if (awayBefore !== null && awayAfter !== null) {
+      const delta = awayAfter - awayBefore;
+      const result: "win" | "draw" | "loss" = ag > hg ? "win" : ag === hg ? "draw" : "loss";
+      allImpacts.push({
+        team: m.away_team,
+        opponent: m.home_team,
+        date: m.date,
+        league: m.league,
+        result,
+        score: m.score,
+        price_before: awayBefore,
+        price_after: awayAfter,
+        delta,
+        abs_delta: Math.abs(delta),
+        home_away: "away",
+      });
+    }
+  }
+
+  // Stats helpers
+  const avg = (arr: number[]) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const stdev = (arr: number[]) => {
+    if (arr.length < 2) return 0;
+    const m = avg(arr);
+    return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+  };
+  const median = (arr: number[]) => {
+    if (arr.length === 0) return 0;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  // Group by result type
+  const resultTypes: ("win" | "draw" | "loss")[] = ["win", "draw", "loss"];
+  const price_impact_by_result: Record<string, unknown>[] = [];
+
+  for (const rt of resultTypes) {
+    const entries = allImpacts.filter((e) => e.result === rt);
+    const deltas = entries.map((e) => e.delta);
+
+    price_impact_by_result.push({
+      result: rt,
+      count: entries.length,
+      avg_delta: round(avg(deltas), 4),
+      median_delta: round(median(deltas), 4),
+      min_delta: round(deltas.length > 0 ? Math.min(...deltas) : 0, 4),
+      max_delta: round(deltas.length > 0 ? Math.max(...deltas) : 0, 4),
+      stdev_delta: round(stdev(deltas), 4),
+      avg_abs_delta: round(avg(entries.map((e) => e.abs_delta)), 4),
+    });
+  }
+
+  // Top 10 biggest price moves (by absolute delta)
+  const top10_price_moves = [...allImpacts]
+    .sort((a, b) => b.abs_delta - a.abs_delta)
+    .slice(0, 10)
+    .map((e) => ({
+      team: e.team,
+      opponent: e.opponent,
+      date: e.date,
+      league: e.league,
+      home_away: e.home_away,
+      result: e.result,
+      score: e.score,
+      price_before: round(e.price_before, 2),
+      price_after: round(e.price_after, 2),
+      delta: round(e.delta, 2),
+    }));
+
+  console.log(`  ${allImpacts.length} price impact observations across ${matches.length} matches`);
+  for (const r of price_impact_by_result) {
+    const rr = r as { result: string; count: number; avg_delta: number; median_delta: number };
+    console.log(`  ${rr.result}: n=${rr.count}, avg=$${rr.avg_delta.toFixed(4)}, median=$${rr.median_delta.toFixed(4)}`);
+  }
+  console.log("  Top 3 biggest moves:");
+  for (const m of top10_price_moves.slice(0, 3)) {
+    console.log(`    ${m.team} ${m.result} vs ${m.opponent} (${m.date}): $${m.price_before} → $${m.price_after} (${m.delta > 0 ? "+" : ""}$${m.delta})`);
+  }
+
   // ─── Assemble export ──────────────────────────────────
   const exportData = {
     generated_at: new Date().toISOString(),
-    data_range: { start: "2026-01-01", end: "2026-02-26" },
+    data_range: { start: "2026-01-01", end: new Date().toISOString().slice(0, 10) },
     totals: {
       teams: new Set(prices.map((p) => p.team)).size,
       matches: matches.length,
@@ -353,6 +504,8 @@ async function main() {
       latest_oracle_price: t.price,
     })),
     top5_daily_prices,
+    price_impact_by_result,
+    top10_price_moves,
   };
 
   const outPath = "data/analytics-export.json";
@@ -378,6 +531,15 @@ async function main() {
   for (const a of arb_frequency) {
     const ar = a as { model: string; pct_gt_3: number; edges_gt_3pct: number };
     console.log(`  ${ar.model}: ${ar.pct_gt_3}% (${ar.edges_gt_3pct} matches)`);
+  }
+  console.log("\nPrice impact (oracle):");
+  for (const r of price_impact_by_result) {
+    const rr = r as { result: string; count: number; avg_delta: number; median_delta: number; avg_abs_delta: number };
+    console.log(`  ${rr.result}: n=${rr.count}, avg Δ=$${rr.avg_delta.toFixed(4)}, median=$${rr.median_delta.toFixed(4)}, avg|Δ|=$${rr.avg_abs_delta.toFixed(4)}`);
+  }
+  console.log("  Top 3 biggest moves:");
+  for (const m of top10_price_moves.slice(0, 3)) {
+    console.log(`    ${m.team} ${m.result} vs ${m.opponent} (${m.date}): $${m.price_before} → $${m.price_after} (Δ=$${m.delta})`);
   }
 }
 

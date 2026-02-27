@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-02-27T12:44:55.146Z",
+  "generated_at": "2026-02-27T13:11:39.611Z",
   "data_range": {
     "start": "2026-01-01",
-    "end": "2026-02-26"
+    "end": "2026-02-27"
   },
   "totals": {
     "teams": 96,
-    "matches": 463,
+    "matches": 537,
     "price_rows": 22272,
     "prediction_rows": 1564,
     "models": [
@@ -26,47 +26,47 @@
   "volatility": [
     {
       "model": "smooth",
-      "avg_daily_change": 0.440314,
-      "daily_stdev": 1.309491,
-      "match_day_vol": 2.413427,
-      "non_match_day_vol": 0.111322,
-      "vol_ratio": 21.6797,
+      "avg_daily_change": 0.440563,
+      "daily_stdev": 1.309434,
+      "match_day_vol": 2.40912,
+      "non_match_day_vol": 0.11135,
+      "vol_ratio": 21.6355,
       "n_changes": 5472,
-      "n_match_day": 782,
-      "n_non_match_day": 4690
+      "n_match_day": 784,
+      "n_non_match_day": 4688
     },
     {
       "model": "reactive",
-      "avg_daily_change": 0.859066,
-      "daily_stdev": 1.611797,
-      "match_day_vol": 3.760729,
-      "non_match_day_vol": 0.375249,
-      "vol_ratio": 10.0219,
+      "avg_daily_change": 0.859028,
+      "daily_stdev": 1.611804,
+      "match_day_vol": 3.751097,
+      "non_match_day_vol": 0.375371,
+      "vol_ratio": 9.993,
       "n_changes": 5472,
-      "n_match_day": 782,
-      "n_non_match_day": 4690
+      "n_match_day": 784,
+      "n_non_match_day": 4688
     },
     {
       "model": "sharp",
-      "avg_daily_change": 0.439322,
-      "daily_stdev": 1.294093,
-      "match_day_vol": 2.40922,
-      "non_match_day_vol": 0.110866,
-      "vol_ratio": 21.731,
+      "avg_daily_change": 0.439572,
+      "daily_stdev": 1.294036,
+      "match_day_vol": 2.404949,
+      "non_match_day_vol": 0.110892,
+      "vol_ratio": 21.6874,
       "n_changes": 5472,
-      "n_match_day": 782,
-      "n_non_match_day": 4690
+      "n_match_day": 784,
+      "n_non_match_day": 4688
     },
     {
       "model": "oracle",
-      "avg_daily_change": 0.588518,
-      "daily_stdev": 1.289129,
-      "match_day_vol": 2.729373,
-      "non_match_day_vol": 0.231557,
-      "vol_ratio": 11.7871,
+      "avg_daily_change": 0.588492,
+      "daily_stdev": 1.289138,
+      "match_day_vol": 2.722411,
+      "non_match_day_vol": 0.231625,
+      "vol_ratio": 11.7535,
       "n_changes": 5472,
-      "n_match_day": 782,
-      "n_non_match_day": 4690
+      "n_match_day": 784,
+      "n_non_match_day": 4688
     }
   ],
   "brier_scores": [
@@ -153,140 +153,140 @@
     {
       "league": "Premier League",
       "model": "smooth",
-      "avg_correlation": -0.026236,
+      "avg_correlation": -0.02624,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "reactive",
-      "avg_correlation": -0.028055,
+      "avg_correlation": -0.028064,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "sharp",
-      "avg_correlation": -0.026454,
+      "avg_correlation": -0.026458,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Premier League",
       "model": "oracle",
-      "avg_correlation": -0.018681,
+      "avg_correlation": -0.018692,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "smooth",
-      "avg_correlation": -0.01739,
+      "avg_correlation": -0.017384,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "reactive",
-      "avg_correlation": -0.031902,
+      "avg_correlation": -0.0319,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "sharp",
-      "avg_correlation": -0.019151,
+      "avg_correlation": -0.019144,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "La Liga",
       "model": "oracle",
-      "avg_correlation": -0.016685,
+      "avg_correlation": -0.016679,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Bundesliga",
       "model": "smooth",
-      "avg_correlation": -0.021016,
+      "avg_correlation": -0.02101,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "reactive",
-      "avg_correlation": -0.03827,
+      "avg_correlation": -0.038285,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "sharp",
-      "avg_correlation": -0.022957,
+      "avg_correlation": -0.022952,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Bundesliga",
       "model": "oracle",
-      "avg_correlation": -0.028173,
+      "avg_correlation": -0.028198,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Serie A",
       "model": "smooth",
-      "avg_correlation": -0.034223,
+      "avg_correlation": -0.034222,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "reactive",
-      "avg_correlation": -0.012846,
+      "avg_correlation": -0.012852,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "sharp",
-      "avg_correlation": -0.030952,
+      "avg_correlation": -0.03095,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Serie A",
       "model": "oracle",
-      "avg_correlation": -0.018432,
+      "avg_correlation": -0.018445,
       "n_pairs": 190,
       "n_teams": 20
     },
     {
       "league": "Ligue 1",
       "model": "smooth",
-      "avg_correlation": -0.028281,
+      "avg_correlation": -0.028261,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "reactive",
-      "avg_correlation": -0.026252,
+      "avg_correlation": -0.026211,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "sharp",
-      "avg_correlation": -0.029317,
+      "avg_correlation": -0.029299,
       "n_pairs": 153,
       "n_teams": 18
     },
     {
       "league": "Ligue 1",
       "model": "oracle",
-      "avg_correlation": -0.01159,
+      "avg_correlation": -0.011537,
       "n_pairs": 153,
       "n_teams": 18
     }
@@ -6188,6 +6188,160 @@
           }
         ]
       }
+    }
+  ],
+  "price_impact_by_result": [
+    {
+      "result": "win",
+      "count": 280,
+      "avg_delta": 2.0438,
+      "median_delta": 1.98,
+      "min_delta": -18.14,
+      "max_delta": 18.15,
+      "stdev_delta": 3.5161,
+      "avg_abs_delta": 3.0208
+    },
+    {
+      "result": "draw",
+      "count": 214,
+      "avg_delta": -0.9919,
+      "median_delta": -0.65,
+      "min_delta": -22.67,
+      "max_delta": 15.81,
+      "stdev_delta": 3.3005,
+      "avg_abs_delta": 2.0859
+    },
+    {
+      "result": "loss",
+      "count": 280,
+      "avg_delta": -1.8407,
+      "median_delta": -2.21,
+      "min_delta": -8.82,
+      "max_delta": 10.57,
+      "stdev_delta": 2.4681,
+      "avg_abs_delta": 2.5953
+    }
+  ],
+  "top10_price_moves": [
+    {
+      "team": "Juventus",
+      "opponent": "Lecce",
+      "date": "2026-01-03",
+      "league": "Serie A",
+      "home_away": "home",
+      "result": "draw",
+      "score": "1-1",
+      "price_before": 64.98,
+      "price_after": 42.31,
+      "delta": -22.67
+    },
+    {
+      "team": "Juventus",
+      "opponent": "Sassuolo",
+      "date": "2026-01-06",
+      "league": "Serie A",
+      "home_away": "away",
+      "result": "win",
+      "score": "0-3",
+      "price_before": 42.31,
+      "price_after": 60.46,
+      "delta": 18.15
+    },
+    {
+      "team": "Como",
+      "opponent": "Udinese",
+      "date": "2026-01-03",
+      "league": "Serie A",
+      "home_away": "home",
+      "result": "win",
+      "score": "1-0",
+      "price_before": 64.01,
+      "price_after": 45.87,
+      "delta": -18.14
+    },
+    {
+      "team": "Genoa",
+      "opponent": "AC Milan",
+      "date": "2026-01-08",
+      "league": "Serie A",
+      "home_away": "away",
+      "result": "draw",
+      "score": "1-1",
+      "price_before": 25.73,
+      "price_after": 41.54,
+      "delta": 15.81
+    },
+    {
+      "team": "Genoa",
+      "opponent": "Pisa",
+      "date": "2026-01-03",
+      "league": "Serie A",
+      "home_away": "home",
+      "result": "draw",
+      "score": "1-1",
+      "price_before": 40.57,
+      "price_after": 25.85,
+      "delta": -14.72
+    },
+    {
+      "team": "Como",
+      "opponent": "Pisa",
+      "date": "2026-01-06",
+      "league": "Serie A",
+      "home_away": "away",
+      "result": "win",
+      "score": "0-3",
+      "price_before": 45.64,
+      "price_after": 60.26,
+      "delta": 14.62
+    },
+    {
+      "team": "Sassuolo",
+      "opponent": "Parma",
+      "date": "2026-01-03",
+      "league": "Serie A",
+      "home_away": "home",
+      "result": "draw",
+      "score": "1-1",
+      "price_before": 47.72,
+      "price_after": 36.15,
+      "delta": -11.57
+    },
+    {
+      "team": "Atalanta",
+      "opponent": "Bologna",
+      "date": "2026-01-07",
+      "league": "Serie A",
+      "home_away": "away",
+      "result": "win",
+      "score": "0-2",
+      "price_before": 58.33,
+      "price_after": 69.4,
+      "delta": 11.07
+    },
+    {
+      "team": "Paris FC",
+      "opponent": "Nantes",
+      "date": "2026-01-18",
+      "league": "Ligue 1",
+      "home_away": "away",
+      "result": "win",
+      "score": "1-2",
+      "price_before": 44.79,
+      "price_after": 33.72,
+      "delta": -11.07
+    },
+    {
+      "team": "Bayern München",
+      "opponent": "VfL Wolfsburg",
+      "date": "2026-01-11",
+      "league": "Bundesliga",
+      "home_away": "home",
+      "result": "win",
+      "score": "8-1",
+      "price_before": 80.1,
+      "price_after": 69.2,
+      "delta": -10.9
     }
   ]
 }
