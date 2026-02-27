@@ -149,11 +149,37 @@ async function uploadOdds() {
   );
 }
 
+async function uploadInjuries() {
+  console.log("=== Uploading injuries ===");
+
+  const injDir = path.resolve("data/api-football/raw/injuries");
+  const files = fs.readdirSync(injDir).filter((f) => f.endsWith(".json"));
+
+  const rows: Record<string, unknown>[] = [];
+  for (const file of files) {
+    const raw = JSON.parse(fs.readFileSync(path.join(injDir, file), "utf-8"));
+    const response = raw.response ?? [];
+    for (const entry of response) {
+      rows.push({
+        fixture_id: entry.fixture?.id,
+        player_name: entry.player?.name,
+        team: entry.team?.name,
+        type: entry.player?.type,
+        reason: entry.player?.reason,
+      });
+    }
+  }
+
+  console.log(`  ${rows.length} injury records to insert`);
+  return insertBatched("injuries", rows);
+}
+
 async function main() {
   const start = Date.now();
 
   const matchResult = await uploadMatches();
   const oddsResult = await uploadOdds();
+  const injResult = await uploadInjuries();
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`\n=== Complete in ${elapsed}s ===`);
@@ -162,6 +188,9 @@ async function main() {
   );
   console.log(
     `  odds_snapshots: ${oddsResult.inserted} inserted, ${oddsResult.failed} failed`
+  );
+  console.log(
+    `  injuries: ${injResult.inserted} inserted, ${injResult.failed} failed`
   );
 }
 
