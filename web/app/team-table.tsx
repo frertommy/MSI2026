@@ -31,6 +31,13 @@ function probColor(prob: number): string {
   return "text-muted";
 }
 
+function priceColor(price: number | null): string {
+  if (price === null) return "text-muted";
+  if (price >= 65) return "text-accent-green";
+  if (price >= 45) return "text-accent-amber";
+  return "text-accent-red";
+}
+
 function wdlBar(w: number, d: number, l: number) {
   const total = w + d + l;
   if (total === 0) return null;
@@ -102,6 +109,7 @@ export function TeamTable({
               <th className="py-2 pr-3 text-right w-10">#</th>
               <th className="py-2 px-3 text-left">Team</th>
               <th className="py-2 px-3 text-left w-16">League</th>
+              <th className="py-2 px-3 text-right w-20">Price</th>
               <th className="py-2 px-3 text-right w-24">Win Prob</th>
               <th className="py-2 px-3 text-right w-10">P</th>
               <th className="py-2 px-3 text-center w-24">W-D-L</th>
@@ -113,7 +121,7 @@ export function TeamTable({
             {ranked.map((t) => (
               <Link
                 key={t.team}
-                href={`/team/${encodeURIComponent(t.team)}`}
+                href={`/compare?team=${encodeURIComponent(t.team)}`}
                 className="contents"
               >
                 <tr className="border-b border-border/50 hover:bg-surface-hover cursor-pointer transition-colors group">
@@ -129,6 +137,15 @@ export function TeamTable({
                     }`}
                   >
                     {LEAGUE_SHORT[t.league] || t.league}
+                  </td>
+                  <td
+                    className={`py-2 px-3 text-right font-mono font-bold ${priceColor(
+                      t.dollarPrice
+                    )}`}
+                  >
+                    {t.dollarPrice !== null
+                      ? `$${t.dollarPrice.toFixed(2)}`
+                      : "---"}
                   </td>
                   <td
                     className={`py-2 px-3 text-right font-mono font-bold ${probColor(

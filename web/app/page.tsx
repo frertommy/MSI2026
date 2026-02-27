@@ -2,6 +2,42 @@ import { supabase } from "@/lib/supabase";
 import { TeamTable } from "./team-table";
 import type { Match, TeamRow } from "@/lib/types";
 
+// Fetch latest smooth dollar_price per team from team_prices
+async function fetchLatestPrices(): Promise<Map<string, number>> {
+  const priceMap = new Map<string, number>();
+
+  // team_prices has ~16k rows; paginate to get them all
+  let from = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("team_prices")
+      .select("team, date, dollar_price")
+      .eq("model", "smooth")
+      .order("date", { ascending: false })
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.error("team_prices fetch error:", error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+
+    for (const row of data) {
+      // Only keep the first (most recent) price per team
+      if (!priceMap.has(row.team)) {
+        priceMap.set(row.team, row.dollar_price);
+      }
+    }
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return priceMap;
+}
+
 // Supabase caps .select() at 1000 rows by default; we need all matches + odds
 async function fetchAllMatches(): Promise<Match[]> {
   const { data, error } = await supabase
@@ -72,7 +108,8 @@ function parseScore(score: string): [number, number] | null {
 
 function computeTeamRows(
   matches: Match[],
-  oddsMap: Map<number, { homeProb: number; awayProb: number }>
+  oddsMap: Map<number, { homeProb: number; awayProb: number }>,
+  priceMap: Map<string, number>
 ): TeamRow[] {
   const teamStats = new Map<
     string,
@@ -145,6 +182,7 @@ function computeTeamRows(
       draws: stats.draws,
       losses: stats.losses,
       latestDate: stats.latestDate,
+      dollarPrice: priceMap.get(team) ?? null,
     });
   }
 
@@ -158,12 +196,13 @@ function computeTeamRows(
 export const revalidate = 300; // revalidate every 5 min
 
 export default async function Home() {
-  const [matches, oddsMap] = await Promise.all([
+  const [matches, oddsMap, priceMap] = await Promise.all([
     fetchAllMatches(),
     fetchClosingOdds(),
+    fetchLatestPrices(),
   ]);
 
-  const teams = computeTeamRows(matches, oddsMap);
+  const teams = computeTeamRows(matches, oddsMap, priceMap);
   const leagues = [...new Set(teams.map((t) => t.league))].sort();
 
   return (
@@ -176,18 +215,10 @@ export default async function Home() {
               MSI 2026
             </h1>
           </div>
-          <div className="flex items-center gap-4">
-            <a
-              href="/compare"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Oracle Compare &rarr;
-            </a>
-            <span className="text-xs text-muted font-mono">
-              {teams.length} teams &middot; {matches.length} matches &middot;{" "}
-              {oddsMap.size} odds fixtures
-            </span>
-          </div>
+          <span className="text-xs text-muted font-mono">
+            {teams.length} teams &middot; {matches.length} matches &middot;{" "}
+            {oddsMap.size} odds fixtures
+          </span>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">

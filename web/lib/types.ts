@@ -8,6 +8,7 @@ export interface TeamRow {
   draws: number;
   losses: number;
   latestDate: string;
+  dollarPrice: number | null;
 }
 
 export interface Match {

@@ -60,6 +60,89 @@ interface MatchProb {
   edge_away: number;
 }
 
+// ─── Legacy MSI name mapping (our short names → legacy full names) ────
+const LEGACY_NAME_MAP: Record<string, string> = {
+  "1. FC Heidenheim": "1. FC Heidenheim 1846",
+  "1899 Hoffenheim": "TSG 1899 Hoffenheim",
+  "Alaves": "Deportivo Alavés",
+  "Angers": "Angers SCO",
+  "Arsenal": "Arsenal FC",
+  "Aston Villa": "Aston Villa FC",
+  "Atalanta": "Atalanta BC",
+  "Atletico Madrid": "Club Atlético de Madrid",
+  "Auxerre": "AJ Auxerre",
+  "Barcelona": "FC Barcelona",
+  "Bayer Leverkusen": "Bayer 04 Leverkusen",
+  "Bayern München": "FC Bayern München",
+  "Bologna": "Bologna FC 1909",
+  "Bournemouth": "AFC Bournemouth",
+  "Brentford": "Brentford FC",
+  "Brighton": "Brighton & Hove Albion FC",
+  "Burnley": "Burnley FC",
+  "Cagliari": "Cagliari Calcio",
+  "Celta Vigo": "RC Celta de Vigo",
+  "Chelsea": "Chelsea FC",
+  "Como": "Como 1907",
+  "Crystal Palace": "Crystal Palace FC",
+  "Espanyol": "RCD Espanyol de Barcelona",
+  "Everton": "Everton FC",
+  "FC St. Pauli": "FC St. Pauli 1910",
+  "FSV Mainz 05": "1. FSV Mainz 05",
+  "Fiorentina": "ACF Fiorentina",
+  "Fulham": "Fulham FC",
+  "Genoa": "Genoa CFC",
+  "Getafe": "Getafe CF",
+  "Girona": "Girona FC",
+  "Hellas Verona": "Hellas Verona FC",
+  "Inter": "FC Internazionale Milano",
+  "Juventus": "Juventus FC",
+  "Lazio": "SS Lazio",
+  "Le Havre": "Le Havre AC",
+  "Lecce": "US Lecce",
+  "Lens": "Racing Club de Lens",
+  "Levante": "Levante UD",
+  "Lille": "Lille OSC",
+  "Liverpool": "Liverpool FC",
+  "Lorient": "FC Lorient",
+  "Lyon": "Olympique Lyonnais",
+  "Mallorca": "RCD Mallorca",
+  "Manchester City": "Manchester City FC",
+  "Manchester United": "Manchester United FC",
+  "Marseille": "Olympique de Marseille",
+  "Metz": "FC Metz",
+  "Monaco": "AS Monaco FC",
+  "Nantes": "FC Nantes",
+  "Napoli": "SSC Napoli",
+  "Newcastle": "Newcastle United FC",
+  "Nice": "OGC Nice",
+  "Nottingham Forest": "Nottingham Forest FC",
+  "Osasuna": "CA Osasuna",
+  "Paris Saint Germain": "Paris Saint-Germain FC",
+  "Parma": "Parma Calcio 1913",
+  "Pisa": "AC Pisa 1909",
+  "Rayo Vallecano": "Rayo Vallecano de Madrid",
+  "Real Betis": "Real Betis Balompié",
+  "Real Madrid": "Real Madrid CF",
+  "Real Sociedad": "Real Sociedad de Fútbol",
+  "Rennes": "Stade Rennais FC 1901",
+  "Sassuolo": "US Sassuolo Calcio",
+  "Sevilla": "Sevilla FC",
+  "Strasbourg": "RC Strasbourg Alsace",
+  "Sunderland": "Sunderland AFC",
+  "Torino": "Torino FC",
+  "Tottenham": "Tottenham Hotspur FC",
+  "Toulouse": "Toulouse FC",
+  "Udinese": "Udinese Calcio",
+  "Union Berlin": "1. FC Union Berlin",
+  "Valencia": "Valencia CF",
+  "Villarreal": "Villarreal CF",
+  "Werder Bremen": "SV Werder Bremen",
+  "West Ham": "West Ham United FC",
+  "Wolves": "Wolverhampton Wanderers FC",
+};
+
+const LEGACY_URL = "https://raw.githubusercontent.com/frertommy/MSI/main/data/msi_daily.json";
+
 // ─── Config ──────────────────────────────────────────────────
 const START_DATE = "2026-01-01";
 const END_DATE = "2026-02-26";
@@ -141,6 +224,48 @@ async function loadOdds(): Promise<OddsRow[]> {
     from += pageSize;
   }
   return all;
+}
+
+// ─── Fetch legacy MSI starting Elos ──────────────────────────
+async function fetchLegacyElos(): Promise<Map<string, number>> {
+  console.log("Fetching legacy MSI ratings...");
+  const resp = await fetch(LEGACY_URL);
+  if (!resp.ok) {
+    console.error(`  Failed to fetch legacy data: ${resp.status}`);
+    return new Map();
+  }
+  const data = await resp.json() as Record<string, { date: string; rating: number }[]>;
+  const eloMap = new Map<string, number>();
+  for (const [legacyName, entries] of Object.entries(data)) {
+    if (!entries || entries.length === 0) continue;
+    const lastRating = entries[entries.length - 1].rating;
+    eloMap.set(legacyName, lastRating);
+  }
+  console.log(`  ${eloMap.size} teams in legacy data`);
+  return eloMap;
+}
+
+function buildStartingElos(
+  allTeams: Set<string>,
+  legacyElos: Map<string, number>
+): { startingElos: Map<string, number>; matched: number; fallback: number } {
+  const startingElos = new Map<string, number>();
+  let matched = 0;
+  let fallback = 0;
+
+  for (const team of allTeams) {
+    // Try mapped name first, then exact match
+    const legacyName = LEGACY_NAME_MAP[team] || team;
+    if (legacyElos.has(legacyName)) {
+      startingElos.set(team, legacyElos.get(legacyName)!);
+      matched++;
+    } else {
+      startingElos.set(team, INITIAL_ELO);
+      fallback++;
+    }
+  }
+
+  return { startingElos, matched, fallback };
 }
 
 // ─── Step 1: Normalize odds (remove margin) ──────────────────
@@ -227,7 +352,8 @@ function bradleyTerry(
   targetDate: string,
   homeAdv: number,
   allTeams: Set<string>,
-  teamLeague: Map<string, string>
+  teamLeague: Map<string, string>,
+  startingElos: Map<string, number>
 ): Map<string, number> {
   // Filter matches within window
   const windowStart = addDays(targetDate, -WINDOW_DAYS);
@@ -235,9 +361,9 @@ function bradleyTerry(
     (m) => m.date >= windowStart && m.date <= targetDate && normalizedOdds.has(m.fixture_id)
   );
 
-  // Initialize ratings
+  // Initialize ratings from legacy starting Elos
   const ratings = new Map<string, number>();
-  for (const t of allTeams) ratings.set(t, INITIAL_ELO);
+  for (const t of allTeams) ratings.set(t, startingElos.get(t) ?? INITIAL_ELO);
 
   if (windowMatches.length === 0) return ratings;
 
@@ -414,7 +540,11 @@ async function insertBatched(
 // ─── Main ────────────────────────────────────────────────────
 async function main() {
   console.log("Loading data from Supabase...");
-  const [matches, odds] = await Promise.all([loadMatches(), loadOdds()]);
+  const [matches, odds, legacyElos] = await Promise.all([
+    loadMatches(),
+    loadOdds(),
+    fetchLegacyElos(),
+  ]);
   console.log(`  ${matches.length} matches, ${odds.length} odds rows`);
 
   // All teams and leagues
@@ -427,6 +557,14 @@ async function main() {
     teamLeague.set(m.away_team, m.league);
   }
   console.log(`  ${allTeams.size} teams across ${new Set(teamLeague.values()).size} leagues`);
+
+  // Build starting Elos from legacy MSI data
+  const { startingElos, matched, fallback } = buildStartingElos(allTeams, legacyElos);
+  console.log(`  Legacy Elo: ${matched} matched, ${fallback} fell back to ${INITIAL_ELO}`);
+  if (fallback > 0) {
+    const fallbackTeams = [...allTeams].filter((t) => !legacyElos.has(LEGACY_NAME_MAP[t] || t));
+    console.log(`  Fallback teams: ${fallbackTeams.join(", ")}`);
+  }
 
   // League means (for carry-forward decay)
   const leagues = [...new Set(teamLeague.values())];
@@ -467,12 +605,12 @@ async function main() {
   for (const date of dates) {
     // Run BT for this date — median odds
     const ratingsMedian = bradleyTerry(
-      matches, medianOdds, date, homeAdv, allTeams, teamLeague
+      matches, medianOdds, date, homeAdv, allTeams, teamLeague, startingElos
     );
 
     // Run BT for this date — pinnacle odds
     const ratingsPinnacle = bradleyTerry(
-      matches, pinnacleOdds, date, homeAdv, allTeams, teamLeague
+      matches, pinnacleOdds, date, homeAdv, allTeams, teamLeague, startingElos
     );
 
     // Compute league means

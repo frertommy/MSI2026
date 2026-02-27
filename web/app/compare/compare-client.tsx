@@ -60,8 +60,8 @@ const TIME_RANGES = [
   { label: "All", days: 999 },
 ];
 
-export function CompareClient({ teams }: { teams: string[] }) {
-  const [selectedTeam, setSelectedTeam] = useState(teams[0] ?? "");
+export function CompareClient({ teams, initialTeam }: { teams: string[]; initialTeam?: string }) {
+  const [selectedTeam, setSelectedTeam] = useState(initialTeam || teams[0] || "");
   const [prices, setPrices] = useState<PriceRow[]>([]);
   const [matchProbs, setMatchProbs] = useState<MatchProbRow[]>([]);
   const [matchDates, setMatchDates] = useState<MatchDate[]>([]);

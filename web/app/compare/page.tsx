@@ -2,25 +2,48 @@ import { supabase } from "@/lib/supabase";
 import { CompareClient } from "./compare-client";
 
 async function getTeams(): Promise<string[]> {
-  const { data, error } = await supabase
-    .from("team_prices")
-    .select("team")
-    .order("team");
+  // team_prices has ~16k rows (96 teams × 57 days × 3 models).
+  // Supabase defaults to 1000-row limit, so we must paginate to get all team names.
+  const allTeams = new Set<string>();
+  let from = 0;
+  const pageSize = 1000;
 
-  if (error) {
-    console.error("Failed to fetch teams:", error.message);
-    return [];
+  while (true) {
+    const { data, error } = await supabase
+      .from("team_prices")
+      .select("team")
+      .order("team")
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      console.error("Failed to fetch teams:", error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+
+    for (const r of data) {
+      allTeams.add(r.team);
+    }
+
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
 
-  // Deduplicate
-  const teams = [...new Set((data ?? []).map((r: { team: string }) => r.team))];
-  return teams.sort();
+  return [...allTeams].sort();
 }
 
 export const revalidate = 300;
 
-export default async function ComparePage() {
+export default async function ComparePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ team?: string }>;
+}) {
   const teams = await getTeams();
+  const params = await searchParams;
+  const initialTeam = params.team && teams.includes(params.team)
+    ? params.team
+    : teams[0] ?? "";
 
   return (
     <div className="min-h-screen bg-background">
@@ -39,7 +62,7 @@ export default async function ComparePage() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
-        <CompareClient teams={teams} />
+        <CompareClient teams={teams} initialTeam={initialTeam} />
       </main>
     </div>
   );
