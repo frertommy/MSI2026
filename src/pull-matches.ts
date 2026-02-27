@@ -1,3 +1,6 @@
+// DEPRECATED: Legacy one-time script. The scheduler service now handles
+// match fetching and writes directly to Supabase. Data files no longer
+// live in the repo — all data is in Supabase.
 import "dotenv/config";
 import { execSync } from "node:child_process";
 import fs from "node:fs";

@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import { writeFileSync } from "fs";
 
 const sb = createClient(
   process.env.SUPABASE_URL as string,
@@ -508,10 +507,27 @@ async function main() {
     top10_price_moves,
   };
 
-  const outPath = "data/analytics-export.json";
-  writeFileSync(outPath, JSON.stringify(exportData, null, 2));
-  const sizeMB = (Buffer.byteLength(JSON.stringify(exportData, null, 2)) / 1024 / 1024).toFixed(2);
-  console.log(`\nWrote ${outPath} (${sizeMB} MB)`);
+  // ─── Write to Supabase ───────────────────────────────
+  const jsonStr = JSON.stringify(exportData);
+  const sizeMB = (Buffer.byteLength(jsonStr) / 1024 / 1024).toFixed(2);
+  console.log(`\nExport payload: ${sizeMB} MB`);
+
+  const { error: upsertErr } = await sb
+    .from("analytics_exports")
+    .insert({
+      exported_at: exportData.generated_at,
+      data: exportData,
+    });
+
+  if (upsertErr) {
+    if (upsertErr.code === "PGRST205") {
+      console.warn("⚠ analytics_exports table not found — run supabase/migrations/002_create_analytics_exports.sql first");
+    } else {
+      console.error("Supabase insert error:", upsertErr.message);
+    }
+  } else {
+    console.log("✅ Wrote analytics export to Supabase (analytics_exports table)");
+  }
 
   // ─── Print summary ────────────────────────────────────
   console.log("\n═══════════════════════════════════════");

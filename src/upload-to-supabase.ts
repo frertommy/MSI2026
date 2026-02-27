@@ -1,3 +1,6 @@
+// DEPRECATED: Legacy one-time upload script. The scheduler service now
+// writes data directly to Supabase. Data files no longer live in the
+// repo — all data is in Supabase.
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import fs from "node:fs";
