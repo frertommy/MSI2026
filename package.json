@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "pull-matches": "tsx src/pull-matches.ts",
-    "pull-odds": "tsx src/pull-odds-injuries.ts"
+    "pull-odds": "tsx src/pull-odds-injuries.ts",
+    "upload": "tsx src/upload-to-supabase.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.98.0",
     "dotenv": "^16.4.7"
   },
   "devDependencies": {
