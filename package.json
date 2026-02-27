@@ -7,7 +7,8 @@
     "pull-matches": "tsx src/pull-matches.ts",
     "pull-odds": "tsx src/pull-odds-injuries.ts",
     "upload": "tsx src/upload-to-supabase.ts",
-    "compute-prices": "tsx src/compute-prices.ts"
+    "compute-prices": "tsx src/compute-prices.ts",
+    "export-analytics": "tsx src/export-analytics.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
