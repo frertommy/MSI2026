@@ -39,7 +39,7 @@ interface TeamPrice {
   model: string;
   implied_elo: number;
   dollar_price: number;
-  raw_dollar_price: number | null;
+  ema_dollar_price: number | null;
   confidence: number;
   matches_in_window: number;
   drift_elo: number;
@@ -984,8 +984,8 @@ async function main() {
       teamPriceRows.push({
         team, league, date, model: "smooth",
         implied_elo: Math.round(eloSmooth * 10) / 10,
-        dollar_price: emaSmooth,
-        raw_dollar_price: rawSmooth,
+        dollar_price: rawSmooth,
+        ema_dollar_price: emaSmooth,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -1004,8 +1004,8 @@ async function main() {
       teamPriceRows.push({
         team, league, date, model: "reactive",
         implied_elo: Math.round(eloReactive * 10) / 10,
-        dollar_price: emaReactive,
-        raw_dollar_price: rawReactive,
+        dollar_price: rawReactive,
+        ema_dollar_price: emaReactive,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -1024,8 +1024,8 @@ async function main() {
       teamPriceRows.push({
         team, league, date, model: "sharp",
         implied_elo: Math.round(eloSharp * 10) / 10,
-        dollar_price: emaSharp,
-        raw_dollar_price: rawSharp,
+        dollar_price: rawSharp,
+        ema_dollar_price: emaSharp,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -1048,8 +1048,8 @@ async function main() {
       teamPriceRows.push({
         team, league, date, model: "oracle",
         implied_elo: Math.round(eloOracle * 10) / 10,
-        dollar_price: emaOracle,
-        raw_dollar_price: rawOracle,
+        dollar_price: rawOracle,
+        ema_dollar_price: emaOracle,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
