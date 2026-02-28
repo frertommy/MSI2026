@@ -307,8 +307,10 @@ async function main() {
   console.log(`  ${matches.length} matches loaded`);
   console.log();
 
-  // 2. Loop over hours
-  const start = new Date(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000);
+  // 2. Loop over hours (round to top of hour for clean timestamps)
+  const rawStart = new Date(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000);
+  const start = new Date(rawStart);
+  start.setUTCMinutes(0, 0, 0);
   let totalRows = 0;
   let totalFailed = 0;
   let totalEvents = 0;
@@ -319,7 +321,8 @@ async function main() {
 
   for (let i = 0; i < HOURS; i++) {
     const date = new Date(start.getTime() + i * 60 * 60 * 1000);
-    const isoDate = date.toISOString();
+    // API requires ISO 8601 without milliseconds (e.g. 2026-02-27T12:00:00Z)
+    const isoDate = date.toISOString().replace(/\.\d{3}Z$/, "Z");
 
     try {
       const { data: events, timestamp, creditsRemaining } =
