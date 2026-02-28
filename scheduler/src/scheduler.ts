@@ -5,11 +5,17 @@ import {
   OUTRIGHT_POLL_INTERVAL,
   HOURLY_POLL_INTERVAL,
   DAILY_CREDIT_SAFETY,
+  POLYMARKET_POLL_INTERVAL,
 } from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
 import { getSupabase } from "./api/supabase-client.js";
 import { pollOdds, pollOutrights } from "./services/odds-poller.js";
+import {
+  pollPolymarketMatches,
+  pollPolymarketFutures,
+  matchPolymarketToFixtures,
+} from "./services/polymarket-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
 import { runPricingEngine } from "./services/pricing-engine.js";
 import { CreditTracker } from "./services/credit-tracker.js";
@@ -26,6 +32,7 @@ export class Scheduler {
   private lastInterval: number = POLL_INTERVALS.FAR_FROM_KICKOFF;
   private lastOutrightPoll = 0;
   private lastHourlyPoll = 0;
+  private lastPolymarketPoll = 0;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -110,6 +117,23 @@ export class Scheduler {
       //     this.lastOutrightPoll = Date.now();
       //   }
       // }
+
+      // 2c. Poll Polymarket (every 10 min — free, no credits, no auth)
+      if (Date.now() - this.lastPolymarketPoll >= POLYMARKET_POLL_INTERVAL) {
+        try {
+          await pollPolymarketMatches();
+          await pollPolymarketFutures();
+          if (this.lookup) {
+            await matchPolymarketToFixtures(this.lookup);
+          }
+          this.lastPolymarketPoll = Date.now();
+        } catch (err) {
+          log.warn(
+            "Polymarket poll failed",
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
 
       // 3. Refresh match scores (every other cycle to save API calls)
       if (this.cycleCount % 2 === 0) {

@@ -86,6 +86,16 @@ export const EMA_ALPHA = 2 / (EMA_SPAN + 1);      // ≈ 0.333
 export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour
 export const DAILY_CREDIT_SAFETY = 400;              // switch to hourly-only above this
 
+// ─── Polymarket data collection (analytics only, no pricing) ─
+export const POLYMARKET_SERIES_IDS: Record<string, string> = {
+  "Premier League": "10188",
+  "La Liga": "10193",
+  Bundesliga: "10194",
+  "Serie A": "10203",
+  "Ligue 1": "10195",
+};
+export const POLYMARKET_POLL_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
