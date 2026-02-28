@@ -80,34 +80,46 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
     if (!team) return;
     setLoading(true);
 
-    // Fetch prices
+    // Only fetch last 60 days of price data
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000)
+      .toISOString()
+      .slice(0, 10);
+
+    // Fetch prices (team-filtered + date-limited)
     const { data: priceData } = await supabase
       .from("team_prices")
       .select("date, model, implied_elo, dollar_price, confidence, matches_in_window")
       .eq("team", team)
+      .gte("date", sixtyDaysAgo)
       .order("date", { ascending: true });
 
-    // Fetch match probabilities (as home or away)
-    const { data: homeProbs } = await supabase
-      .from("match_probabilities")
-      .select("fixture_id, model, date, home_team, away_team, edge_home, edge_draw, edge_away")
-      .eq("home_team", team);
+    // Fetch match probabilities (team-filtered, both home and away in parallel)
+    const [{ data: homeProbs }, { data: awayProbs }] = await Promise.all([
+      supabase
+        .from("match_probabilities")
+        .select("fixture_id, model, date, home_team, away_team, edge_home, edge_draw, edge_away")
+        .eq("home_team", team)
+        .gte("date", sixtyDaysAgo),
+      supabase
+        .from("match_probabilities")
+        .select("fixture_id, model, date, home_team, away_team, edge_home, edge_draw, edge_away")
+        .eq("away_team", team)
+        .gte("date", sixtyDaysAgo),
+    ]);
 
-    const { data: awayProbs } = await supabase
-      .from("match_probabilities")
-      .select("fixture_id, model, date, home_team, away_team, edge_home, edge_draw, edge_away")
-      .eq("away_team", team);
-
-    // Fetch matches for this team to get match days
-    const { data: homeMatches } = await supabase
-      .from("matches")
-      .select("date, away_team")
-      .eq("home_team", team);
-
-    const { data: awayMatches } = await supabase
-      .from("matches")
-      .select("date, home_team")
-      .eq("away_team", team);
+    // Fetch matches for this team to get match days (in parallel)
+    const [{ data: homeMatches }, { data: awayMatches }] = await Promise.all([
+      supabase
+        .from("matches")
+        .select("date, away_team")
+        .eq("home_team", team)
+        .gte("date", sixtyDaysAgo),
+      supabase
+        .from("matches")
+        .select("date, home_team")
+        .eq("away_team", team)
+        .gte("date", sixtyDaysAgo),
+    ]);
 
     setPrices(priceData ?? []);
     setMatchProbs([...(homeProbs ?? []), ...(awayProbs ?? [])]);
@@ -131,14 +143,12 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
     fetchData(selectedTeam);
   }, [selectedTeam, fetchData]);
 
-  // Filter by time range
-  const endDate = "2026-02-26";
+  // Filter by time range (dynamic, not hardcoded)
+  const today = new Date().toISOString().slice(0, 10);
   const startDate =
     timeRange >= 999
-      ? "2026-01-01"
-      : new Date(
-          new Date(endDate).getTime() - timeRange * 86400000
-        )
+      ? "2020-01-01"
+      : new Date(Date.now() - timeRange * 86400000)
           .toISOString()
           .slice(0, 10);
 
@@ -268,8 +278,28 @@ export function CompareClient({ teams, initialTeam }: { teams: string[]; initial
       </div>
 
       {loading && (
-        <div className="text-center text-muted py-12 text-sm font-mono">
-          Loading data...
+        <div className="space-y-6 animate-pulse">
+          <div className="border border-border rounded-lg p-4 bg-surface">
+            <div className="h-4 w-48 rounded bg-border/50 mb-4" />
+            <div className="h-[350px] rounded bg-border/30 flex items-center justify-center">
+              <div className="flex items-center gap-2 text-muted text-sm font-mono">
+                <div className="h-4 w-4 rounded-full border-2 border-accent-green border-t-transparent animate-spin" />
+                Loading price data...
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="border border-border rounded-lg p-4 bg-surface">
+                <div className="h-3 w-20 rounded bg-border/50 mb-3" />
+                <div className="space-y-2">
+                  <div className="h-3 w-full rounded bg-border/50" />
+                  <div className="h-3 w-3/4 rounded bg-border/50" />
+                  <div className="h-3 w-2/3 rounded bg-border/50" />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

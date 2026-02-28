@@ -2,34 +2,23 @@ import { supabase } from "@/lib/supabase";
 import { CompareClient } from "./compare-client";
 
 async function getTeams(): Promise<string[]> {
-  // team_prices has ~16k rows (96 teams × 57 days × 3 models).
-  // Supabase defaults to 1000-row limit, so we must paginate to get all team names.
-  const allTeams = new Set<string>();
-  let from = 0;
-  const pageSize = 1000;
+  // Fetch only one row per team (latest oracle price) instead of all 22k rows.
+  // Filter to a single model and recent date to minimize the result set.
+  const { data, error } = await supabase
+    .from("team_prices")
+    .select("team")
+    .eq("model", "oracle")
+    .order("team");
 
-  while (true) {
-    const { data, error } = await supabase
-      .from("team_prices")
-      .select("team")
-      .order("team")
-      .range(from, from + pageSize - 1);
-
-    if (error) {
-      console.error("Failed to fetch teams:", error.message);
-      break;
-    }
-    if (!data || data.length === 0) break;
-
-    for (const r of data) {
-      allTeams.add(r.team);
-    }
-
-    if (data.length < pageSize) break;
-    from += pageSize;
+  if (error) {
+    console.error("Failed to fetch teams:", error.message);
+    return [];
   }
 
-  return [...allTeams].sort();
+  // Deduplicate (multiple dates per team, but far fewer rows than all models × all dates)
+  const teams = new Set<string>();
+  for (const r of data ?? []) teams.add(r.team);
+  return [...teams].sort();
 }
 
 export const revalidate = 300;
