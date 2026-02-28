@@ -95,6 +95,13 @@ export const POLYMARKET_SERIES_IDS: Record<string, string> = {
   "Ligue 1": "10195",
 };
 export const POLYMARKET_POLL_INTERVAL = 10 * 60 * 1000; // 10 minutes
+export const POLYMARKET_FUTURES_SLUGS: Record<string, string> = {
+  "Premier League": "english-premier-league-winner",
+  "La Liga": "la-liga-winner",
+  Bundesliga: "bundesliga-winner",
+  "Serie A": "serie-a-winner",
+  "Ligue 1": "french-ligue-1-winner",
+};
 
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift

@@ -8,7 +8,7 @@ import {
   matchEventToFixture,
   type TeamLookup,
 } from "../utils/team-names.js";
-import { POLYMARKET_SERIES_IDS } from "../config.js";
+import { POLYMARKET_SERIES_IDS, POLYMARKET_FUTURES_SLUGS } from "../config.js";
 import { log } from "../logger.js";
 import type { LiveOddsEvent } from "../types.js";
 
@@ -319,99 +319,92 @@ export async function pollPolymarketMatches(): Promise<{
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 2. pollPolymarketFutures — league winner markets
+// 2. pollPolymarketFutures — league winner markets (slug-based)
 // ═══════════════════════════════════════════════════════════════
 export async function pollPolymarketFutures(): Promise<{
   rowsInserted: number;
 }> {
   log.info("Polymarket: polling futures...");
-  const sb = getSupabase();
   const allRows: Record<string, unknown>[] = [];
   const now = new Date().toISOString();
   const allEventIds: string[] = [];
 
-  // Search for winner/champion markets for each league
-  const searchTerms: Record<string, string[]> = {
-    "Premier League": ["EPL Winner", "Premier League Winner"],
-    "La Liga": ["La Liga Winner"],
-    Bundesliga: ["Bundesliga Winner"],
-    "Serie A": ["Serie A Winner"],
-    "Ligue 1": ["Ligue 1 Winner"],
-  };
+  const leagues = Object.entries(POLYMARKET_FUTURES_SLUGS);
 
-  for (const [league, terms] of Object.entries(searchTerms)) {
-    for (const term of terms) {
-      try {
-        const url = `${GAMMA_BASE}/events?search=${encodeURIComponent(term)}&active=true&closed=false&limit=5`;
-        const resp = await fetch(url);
-        if (!resp.ok) continue;
+  for (let i = 0; i < leagues.length; i++) {
+    const [league, slug] = leagues[i];
 
-        const events = (await resp.json()) as GammaEvent[];
-
-        for (const event of events) {
-          // Filter for actual football winner events
-          const titleLower = event.title.toLowerCase();
-          if (
-            !titleLower.includes("winner") &&
-            !titleLower.includes("champion")
-          )
-            continue;
-          if (
-            !titleLower.includes(league.toLowerCase()) &&
-            !titleLower.includes("epl") &&
-            !titleLower.includes("premier")
-          )
-            continue;
-
-          const eventId = String(event.id);
-          allEventIds.push(eventId);
-
-          // Each market is a binary "Will X win?" for one team
-          for (const mkt of event.markets) {
-            if (mkt.closed || !mkt.active) continue;
-
-            let prices: number[];
-            try {
-              prices = (JSON.parse(mkt.outcomePrices) as string[]).map((p) =>
-                parseFloat(p)
-              );
-            } catch {
-              continue;
-            }
-
-            const yesPrice = prices[0] || 0;
-            if (yesPrice <= 0) continue;
-
-            // Extract team name from question or groupItemTitle
-            const teamRaw =
-              mkt.groupItemTitle ??
-              mkt.question
-                .replace(/^Will\s+/i, "")
-                .replace(/\s+win.*$/i, "")
-                .trim();
-            const team = resolvePolymarketName(teamRaw);
-
-            allRows.push({
-              league,
-              team,
-              implied_prob: Math.round(yesPrice * 10000) / 10000,
-              price:
-                yesPrice > 0
-                  ? Math.round((1 / yesPrice) * 100) / 100
-                  : null,
-              volume: Math.round((mkt.volumeNum || 0) * 100) / 100,
-              volume_delta: 0,
-              polymarket_event_id: eventId,
-              snapshot_time: now,
-            });
-          }
-        }
-      } catch {
-        // Search failed for this term — continue
+    try {
+      const url = `${GAMMA_BASE}/events?slug=${slug}`;
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        log.warn(`Polymarket futures ${league}: HTTP ${resp.status}`);
+        continue;
       }
 
-      await sleep(500);
+      const data = (await resp.json()) as GammaEvent[];
+      if (!data || data.length === 0) {
+        log.debug(`Polymarket futures ${league}: slug "${slug}" not found`);
+        continue;
+      }
+
+      const event = data[0];
+      const eventId = String(event.id);
+      allEventIds.push(eventId);
+      let teamCount = 0;
+
+      // Each market is a binary "Will X win?" — one per team
+      for (const mkt of event.markets) {
+        if (mkt.closed || !mkt.active) continue;
+
+        let prices: number[];
+        try {
+          const parsed = JSON.parse(mkt.outcomePrices) as string[];
+          if (parsed.length === 0) continue;
+          prices = parsed.map((p) => parseFloat(p));
+        } catch {
+          continue;
+        }
+
+        const yesPrice = prices[0] || 0;
+        if (yesPrice <= 0) continue;
+
+        // Extract team name from groupItemTitle or question
+        const teamRaw =
+          mkt.groupItemTitle ??
+          mkt.question
+            .replace(/^Will\s+(the\s+)?/i, "")
+            .replace(/\s+win.*$/i, "")
+            .trim();
+
+        // Skip meta-markets like "Other", "Club A", etc.
+        if (/^(other|club [a-z]|none)$/i.test(teamRaw)) continue;
+
+        const team = resolvePolymarketName(teamRaw);
+        teamCount++;
+
+        allRows.push({
+          league,
+          team,
+          implied_prob: Math.round(yesPrice * 10000) / 10000,
+          price: Math.round((1 / yesPrice) * 100) / 100,
+          volume: Math.round((mkt.volumeNum || 0) * 100) / 100,
+          volume_delta: 0,
+          polymarket_event_id: eventId,
+          snapshot_time: now,
+        });
+      }
+
+      log.info(`  Polymarket futures ${league}: ${teamCount} teams`);
+    } catch (err) {
+      log.warn(
+        `Polymarket futures ${league} failed`,
+        err instanceof Error ? err.message : err
+      );
     }
+
+    // Rate limit between leagues
+    if (i < leagues.length - 1) await sleep(500);
   }
 
   if (allRows.length === 0) {
