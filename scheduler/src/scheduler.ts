@@ -2,11 +2,12 @@ import {
   POLL_INTERVALS,
   CREDITS_FALLBACK_INTERVAL,
   CREDITS_DAILY_SOFT_LIMIT,
+  OUTRIGHT_POLL_INTERVAL,
 } from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
 import { getSupabase } from "./api/supabase-client.js";
-import { pollOdds } from "./services/odds-poller.js";
+import { pollOdds, pollOutrights } from "./services/odds-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
 import { runPricingEngine } from "./services/pricing-engine.js";
 import { CreditTracker } from "./services/credit-tracker.js";
@@ -21,6 +22,7 @@ export class Scheduler {
   private creditTracker: CreditTracker;
   private lastPollResult: PollResult | null = null;
   private lastInterval: number = POLL_INTERVALS.FAR_FROM_KICKOFF;
+  private lastOutrightPoll = 0;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -87,6 +89,16 @@ export class Scheduler {
           lastPollResult: this.lastPollResult,
           credits: this.creditTracker.getStatus(),
         });
+      }
+
+      // 2b. Poll outrights (every 6 hours)
+      if (Date.now() - this.lastOutrightPoll >= OUTRIGHT_POLL_INTERVAL) {
+        if (this.creditTracker.canPoll()) {
+          await pollOutrights(this.lookup!, this.creditTracker);
+          this.lastOutrightPoll = Date.now();
+        } else {
+          log.warn("Skipping outright poll — credit limit reached");
+        }
       }
 
       // 3. Refresh match scores (every other cycle to save API calls)

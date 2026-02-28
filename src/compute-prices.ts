@@ -164,6 +164,9 @@ const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
 const DRIFT_FADE_DAYS = 7;      // Days-before-kickoff at which drift reaches full weight
 
+// ─── Outright blending constant ─────────────────────────────
+const OUTRIGHT_WEIGHT = 0.15;   // blend weight into oracle model
+
 interface DriftSnapshot {
   fixture_id: number;
   bookmaker: string;
@@ -271,6 +274,79 @@ async function loadAllOddsForDrift(): Promise<Map<number, DriftSnapshot[]>> {
     map.get(s.fixture_id)!.push(s);
   }
   return map;
+}
+
+// ─── Load outright odds for oracle blending ─────────────────
+async function loadOutrightOdds(): Promise<Map<string, number>> {
+  try {
+    const all: { league: string; team: string; implied_prob: number; snapshot_time: string }[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    while (true) {
+      const { data, error } = await sb
+        .from("outright_odds")
+        .select("league, team, implied_prob, snapshot_time")
+        .order("snapshot_time", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        if (error.code === "PGRST205" || error.message.includes("does not exist")) {
+          console.log("  outright_odds table not found — skipping outright blending");
+          return new Map();
+        }
+        console.error(`  Failed to load outright_odds: ${error.message}`);
+        return new Map();
+      }
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+
+    if (all.length === 0) {
+      console.log("  No outright odds data — skipping outright blending");
+      return new Map();
+    }
+
+    // For each team, take only the most recent snapshot (data is sorted DESC)
+    const latestByTeam = new Map<string, { league: string; impliedProb: number }>();
+    for (const row of all) {
+      if (!latestByTeam.has(row.team)) {
+        latestByTeam.set(row.team, {
+          league: row.league,
+          impliedProb: row.implied_prob,
+        });
+      }
+    }
+
+    // Group by league for normalization
+    const byLeague = new Map<string, { team: string; prob: number }[]>();
+    for (const [team, info] of latestByTeam) {
+      if (!byLeague.has(info.league)) byLeague.set(info.league, []);
+      byLeague.get(info.league)!.push({ team, prob: info.impliedProb });
+    }
+
+    // Normalize per league and compute outright Elo
+    const outrightElos = new Map<string, number>();
+    for (const [league, teams] of byLeague) {
+      const totalProb = teams.reduce((s, t) => s + t.prob, 0);
+      if (totalProb <= 0) continue;
+      const N = teams.length;
+
+      for (const t of teams) {
+        const normalizedProb = t.prob / totalProb;
+        const baseline = 1 / N;
+        const ratio = Math.max(0.001, normalizedProb) / baseline;
+        const outrightElo = INITIAL_ELO + 400 * Math.log10(ratio);
+        outrightElos.set(t.team, outrightElo);
+      }
+    }
+
+    console.log(`  Loaded outright Elos for ${outrightElos.size} teams across ${byLeague.size} leagues`);
+    return outrightElos;
+  } catch {
+    console.log("  outright_odds load failed — table may not exist");
+    return new Map();
+  }
 }
 
 // ─── Odds drift signal ──────────────────────────────────────
@@ -734,13 +810,14 @@ async function insertBatched(
 // ─── Main ────────────────────────────────────────────────────
 async function main() {
   console.log("Loading data from Supabase...");
-  const [matches, odds, legacyElos, allDriftOdds] = await Promise.all([
+  const [matches, odds, legacyElos, allDriftOdds, outrightElos] = await Promise.all([
     loadMatches(),
     loadOdds(),
     fetchLegacyElos(),
     loadAllOddsForDrift(),
+    loadOutrightOdds(),
   ]);
-  console.log(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots`);
+  console.log(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots, ${outrightElos.size} outright Elos`);
 
   // All teams and leagues
   const allTeams = new Set<string>();
@@ -925,9 +1002,13 @@ async function main() {
         drift_elo: driftRounded,
       });
 
-      // Oracle D — oracle (pinnacle BT + shocks + drift)
+      // Oracle D — oracle (pinnacle BT + outright blending + shocks + drift)
       const oracleBoost = activeShockBoost(team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
-      const eloOracle = eloSharpBase + oracleBoost + drift;
+      const outrightElo = outrightElos.get(team);
+      const blendedSharpBase = outrightElo !== undefined
+        ? (1 - OUTRIGHT_WEIGHT) * eloSharpBase + OUTRIGHT_WEIGHT * outrightElo
+        : eloSharpBase;
+      const eloOracle = blendedSharpBase + oracleBoost + drift;
       const priceOracle = logistic(eloOracle, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "oracle",
@@ -966,13 +1047,23 @@ async function main() {
           homeElo = (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) + homeDrift;
           awayElo = (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) + awayDrift;
         } else {
-          // oracle: pinnacle BT + oracle shocks + drift
+          // oracle: pinnacle BT + outright blending + oracle shocks + drift
+          const homeSharpBase = ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO;
+          const awaySharpBase = ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO;
+          const homeOutright = outrightElos.get(m.home_team);
+          const awayOutright = outrightElos.get(m.away_team);
+          const homeBlended = homeOutright !== undefined
+            ? (1 - OUTRIGHT_WEIGHT) * homeSharpBase + OUTRIGHT_WEIGHT * homeOutright
+            : homeSharpBase;
+          const awayBlended = awayOutright !== undefined
+            ? (1 - OUTRIGHT_WEIGHT) * awaySharpBase + OUTRIGHT_WEIGHT * awayOutright
+            : awaySharpBase;
           homeElo =
-            (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) +
+            homeBlended +
             activeShockBoost(m.home_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE) +
             homeDrift;
           awayElo =
-            (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) +
+            awayBlended +
             activeShockBoost(m.away_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE) +
             awayDrift;
         }

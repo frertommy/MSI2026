@@ -25,6 +25,7 @@ import {
   DRIFT_SCALE,
   DRIFT_MIN_HOURS,
   DRIFT_FADE_DAYS,
+  OUTRIGHT_WEIGHT,
 } from "../config.js";
 import type {
   Match,
@@ -201,6 +202,89 @@ async function loadDriftOdds(): Promise<Map<number, DriftSnapshot[]>> {
     });
   }
   return map;
+}
+
+/**
+ * Load outright (league winner) odds from the outright_odds table.
+ * For each team, take the most recent snapshot, normalize probabilities per league,
+ * and compute an outright Elo: 1500 + 400 * log10(normalizedProb / (1/N)).
+ * Returns Map<team, outrightElo>. Empty map if table doesn't exist.
+ */
+async function loadOutrightOdds(): Promise<Map<string, number>> {
+  const sb = getSupabase();
+
+  try {
+    const { data, error } = await sb
+      .from("outright_odds")
+      .select("league, team, outright_odds, implied_prob, snapshot_time")
+      .order("snapshot_time", { ascending: false });
+
+    if (error) {
+      if (error.code === "PGRST205" || error.message.includes("does not exist")) {
+        log.debug("outright_odds table not found — skipping outright blending");
+        return new Map();
+      }
+      log.warn("Failed to load outright_odds", error.message);
+      return new Map();
+    }
+
+    if (!data || data.length === 0) {
+      log.debug("No outright odds data — skipping outright blending");
+      return new Map();
+    }
+
+    // For each team, take only the most recent snapshot (data is sorted DESC)
+    const latestByTeam = new Map<string, { league: string; impliedProb: number }>();
+    for (const row of data) {
+      if (!latestByTeam.has(row.team)) {
+        latestByTeam.set(row.team, {
+          league: row.league,
+          impliedProb: row.implied_prob,
+        });
+      }
+    }
+
+    // Group by league for normalization
+    const byLeague = new Map<string, { team: string; prob: number }[]>();
+    for (const [team, info] of latestByTeam) {
+      if (!byLeague.has(info.league)) byLeague.set(info.league, []);
+      byLeague.get(info.league)!.push({ team, prob: info.impliedProb });
+    }
+
+    // Normalize per league and compute outright Elo
+    const outrightElos = new Map<string, number>();
+    for (const [league, teams] of byLeague) {
+      const totalProb = teams.reduce((s, t) => s + t.prob, 0);
+      if (totalProb <= 0) continue;
+      const N = teams.length;
+
+      for (const t of teams) {
+        const normalizedProb = t.prob / totalProb;
+        const baseline = 1 / N;
+        // Avoid log(0)
+        const ratio = Math.max(0.001, normalizedProb) / baseline;
+        const outrightElo = INITIAL_ELO + 400 * Math.log10(ratio);
+        outrightElos.set(t.team, outrightElo);
+      }
+
+      log.debug(
+        `Outright Elo: ${league} — ${teams.length} teams, top=${teams
+          .sort((a, b) => b.prob - a.prob)
+          .slice(0, 3)
+          .map((t) => `${t.team} ${(t.prob / totalProb * 100).toFixed(1)}%`)
+          .join(", ")}`
+      );
+    }
+
+    log.info(`Loaded outright Elos for ${outrightElos.size} teams across ${byLeague.size} leagues`);
+    return outrightElos;
+  } catch (err) {
+    log.warn(
+      "Failed to load outright odds",
+      err instanceof Error ? err.message : err
+    );
+    return new Map();
+  }
 }
 
 async function fetchLegacyElos(): Promise<Map<string, number>> {
@@ -582,13 +666,14 @@ export async function runPricingEngine(options?: {
 
   log.info(`Pricing engine: ${START_DATE} → ${END_DATE}`);
 
-  const [matches, odds, legacyElos, allDriftOdds] = await Promise.all([
+  const [matches, odds, legacyElos, allDriftOdds, outrightElos] = await Promise.all([
     loadMatches(),
     loadOdds(),
     fetchLegacyElos(),
     loadDriftOdds(),
+    loadOutrightOdds(),
   ]);
-  log.info(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots`);
+  log.info(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots, ${outrightElos.size} outright Elos`);
 
   // All teams and leagues
   const allTeams = new Set<string>();
@@ -780,14 +865,18 @@ export async function runPricingEngine(options?: {
         drift_elo: driftRounded,
       });
 
-      // Oracle
+      // Oracle (with outright blending)
       const oracleBoost = activeShockBoost(
         team,
         date,
         oracleShocks,
         ORACLE_SHOCK_HALF_LIFE
       );
-      const eloOracle = eloSharpBase + oracleBoost + drift;
+      const outrightElo = outrightElos.get(team);
+      const blendedSharpBase = outrightElo !== undefined
+        ? (1 - OUTRIGHT_WEIGHT) * eloSharpBase + OUTRIGHT_WEIGHT * outrightElo
+        : eloSharpBase;
+      const eloOracle = blendedSharpBase + oracleBoost + drift;
       teamPriceRows.push({
         team,
         league,
@@ -834,8 +923,19 @@ export async function runPricingEngine(options?: {
           homeElo = (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) + homeDrift;
           awayElo = (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) + awayDrift;
         } else {
+          // Oracle: blend outright Elo into sharp base
+          const homeSharpBase = ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO;
+          const awaySharpBase = ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO;
+          const homeOutright = outrightElos.get(m.home_team);
+          const awayOutright = outrightElos.get(m.away_team);
+          const homeBlended = homeOutright !== undefined
+            ? (1 - OUTRIGHT_WEIGHT) * homeSharpBase + OUTRIGHT_WEIGHT * homeOutright
+            : homeSharpBase;
+          const awayBlended = awayOutright !== undefined
+            ? (1 - OUTRIGHT_WEIGHT) * awaySharpBase + OUTRIGHT_WEIGHT * awayOutright
+            : awaySharpBase;
           homeElo =
-            (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) +
+            homeBlended +
             activeShockBoost(
               m.home_team,
               date,
@@ -844,7 +944,7 @@ export async function runPricingEngine(options?: {
             ) +
             homeDrift;
           awayElo =
-            (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) +
+            awayBlended +
             activeShockBoost(
               m.away_team,
               date,

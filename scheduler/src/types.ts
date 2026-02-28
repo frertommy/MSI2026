@@ -2,6 +2,7 @@
 export interface OddsOutcome {
   name: string;
   price: number;
+  point?: number;  // for totals (2.5) and spreads (-1.5)
 }
 
 export interface BookmakerMarket {

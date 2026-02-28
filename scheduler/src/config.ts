@@ -46,7 +46,7 @@ export const POLL_INTERVALS = {
 
 // ─── Credit limits ───────────────────────────────────────────
 export const CREDITS_DAILY_SOFT_LIMIT = 450; // reserve 50 for manual
-export const CREDITS_PER_LEAGUE_CALL = 1; // live endpoint = 1 credit
+export const CREDITS_PER_LEAGUE_CALL = 3; // h2h + totals + spreads = 3 credits
 export const CREDITS_FALLBACK_INTERVAL = 60 * 60 * 1000; // hourly when low
 
 // ─── Pricing engine constants (mirrored from src/compute-prices.ts) ───
@@ -63,6 +63,18 @@ export const CARRY_DECAY = 0.005;
 export const DOLLAR_SPREAD = 220;
 export const ORACLE_WEIGHT = 0.7;
 export const BATCH_SIZE = 500;
+
+// ─── Outright futures mapping ─────────────────────────────────
+export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
+  "Premier League": "soccer_epl_winner",
+  "La Liga": "soccer_spain_la_liga_winner",
+  Bundesliga: "soccer_germany_bundesliga_winner",
+  "Serie A": "soccer_italy_serie_a_winner",
+  "Ligue 1": "soccer_france_ligue_one_winner",
+};
+
+export const OUTRIGHT_WEIGHT = 0.15;                    // blend weight into oracle
+export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
