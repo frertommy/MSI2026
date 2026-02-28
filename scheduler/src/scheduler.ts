@@ -3,6 +3,8 @@ import {
   CREDITS_FALLBACK_INTERVAL,
   CREDITS_DAILY_SOFT_LIMIT,
   OUTRIGHT_POLL_INTERVAL,
+  HOURLY_POLL_INTERVAL,
+  DAILY_CREDIT_SAFETY,
 } from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
@@ -23,6 +25,7 @@ export class Scheduler {
   private lastPollResult: PollResult | null = null;
   private lastInterval: number = POLL_INTERVALS.FAR_FROM_KICKOFF;
   private lastOutrightPoll = 0;
+  private lastHourlyPoll = 0;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -74,7 +77,9 @@ export class Scheduler {
   private async runCycle(): Promise<void> {
     this.cycleCount++;
     const cycleStart = Date.now();
-    log.info(`═══ Cycle #${this.cycleCount} starting ═══`);
+    const matchDayActive = this.isMatchDayActivePolling();
+    const pollType = matchDayActive ? "match-day" : "hourly-baseline";
+    log.info(`═══ Cycle #${this.cycleCount} starting (${pollType}) ═══`);
 
     try {
       // 1. Check credits
@@ -89,6 +94,12 @@ export class Scheduler {
           lastPollResult: this.lastPollResult,
           credits: this.creditTracker.getStatus(),
         });
+
+        // Track hourly baseline polls
+        if (!matchDayActive) {
+          this.lastHourlyPoll = Date.now();
+          log.info("Hourly baseline poll completed");
+        }
       }
 
       // 2b. Poll outrights (every 6 hours)
@@ -194,26 +205,63 @@ export class Scheduler {
   }
 
   /**
+   * Determine if we're in match-day active polling mode (5-min cycle).
+   * True when: matches today + peak hours (10-22 UTC) + credit safety not exceeded.
+   */
+  private isMatchDayActivePolling(): boolean {
+    if (!this.lookup) return false;
+
+    const today = new Date().toISOString().slice(0, 10);
+    let hasMatchesToday = false;
+
+    for (const entries of this.lookup.byName.values()) {
+      for (const entry of entries) {
+        if (entry.date === today) {
+          hasMatchesToday = true;
+          break;
+        }
+      }
+      if (hasMatchesToday) break;
+    }
+
+    if (!hasMatchesToday) return false;
+
+    const hour = new Date().getUTCHours();
+    if (hour < 10 || hour > 22) return false;
+
+    // Credit safety: above 400 credits used today → not active mode
+    const status = this.creditTracker.getStatus();
+    if (status.usedToday > DAILY_CREDIT_SAFETY) return false;
+
+    return true;
+  }
+
+  /**
    * Compute the next polling interval based on proximity to kickoff times.
-   * Uses commence_times from the latest poll results + Supabase matches.
+   * Hourly baseline (60 min) runs 24/7; 5-min match-day polling overlays it
+   * during peak hours if credit budget allows.
    */
   private computeNextInterval(): number {
-    // If credits are low, fall back to hourly
+    // If credits are critically low, fall back to hourly
     if (!this.creditTracker.canPoll()) {
       return CREDITS_FALLBACK_INTERVAL;
     }
 
-    const now = Date.now();
+    // Credit safety: above 400 credits used today → hourly only, no 5-min
+    const status = this.creditTracker.getStatus();
+    if (status.usedToday > DAILY_CREDIT_SAFETY) {
+      log.warn(
+        `Credit safety (${status.usedToday}/${DAILY_CREDIT_SAFETY}) — hourly-only mode`
+      );
+      return HOURLY_POLL_INTERVAL;
+    }
 
-    // Gather commence times from last poll
-    // (We don't store them directly, but we can check the next match date from lookup)
     if (this.lookup) {
       const today = new Date().toISOString().slice(0, 10);
       const tomorrow = new Date(Date.now() + 86400000)
         .toISOString()
         .slice(0, 10);
 
-      // Check if there are matches today or tomorrow
       let hasMatchesToday = false;
       let hasMatchesTomorrow = false;
 
@@ -224,25 +272,23 @@ export class Scheduler {
         }
       }
 
-      if (!hasMatchesToday && !hasMatchesTomorrow) {
-        return POLL_INTERVALS.NO_MATCHES_TODAY;
-      }
-
       if (hasMatchesToday) {
-        // Approximate: most matches kick off between 12:00 and 21:00 UTC
-        // Without exact commence times, use a reasonable default
         const hour = new Date().getUTCHours();
 
         if (hour >= 10 && hour <= 22) {
-          // Peak match hours — poll frequently
-          return POLL_INTERVALS.APPROACHING; // 5 min
+          // Peak match hours — 5-min match-day polling
+          return POLL_INTERVALS.APPROACHING;
         }
 
-        return POLL_INTERVALS.FAR_FROM_KICKOFF; // 60 min
+        // Off-peak match day → hourly baseline
+        return HOURLY_POLL_INTERVAL;
       }
+
+      // No matches today — hourly baseline (was 120 min, now 60 min)
+      return HOURLY_POLL_INTERVAL;
     }
 
-    // Default: far from kickoff
-    return POLL_INTERVALS.FAR_FROM_KICKOFF;
+    // Default: hourly baseline
+    return HOURLY_POLL_INTERVAL;
   }
 }

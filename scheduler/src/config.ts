@@ -80,6 +80,10 @@ export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 export const EMA_SPAN = 5;                         // 5-day EMA
 export const EMA_ALPHA = 2 / (EMA_SPAN + 1);      // ≈ 0.333
 
+// ─── Hourly baseline polling ─────────────────────────────────
+export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour
+export const DAILY_CREDIT_SAFETY = 400;              // switch to hourly-only above this
+
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
