@@ -24,8 +24,9 @@ const sb = createClient(
 // ─── Config ─────────────────────────────────────────────────
 const ODDS_API_KEY = process.env.ODDS_API_KEY as string;
 const SPORT_KEY = "soccer_epl";
-const BACKFILL_DAYS = 7;
-const HOURS = BACKFILL_DAYS * 24; // 168
+const BACKFILL_START_DAYS_AGO = 21;
+const BACKFILL_END_DAYS_AGO = 7;
+const HOURS = (BACKFILL_START_DAYS_AGO - BACKFILL_END_DAYS_AGO) * 24; // 336
 const RATE_LIMIT_MS = 1000;
 const BATCH_SIZE = 500;
 
@@ -296,8 +297,9 @@ async function createFixture(
 
 // ─── Main ───────────────────────────────────────────────────
 async function main() {
+  const backfillDays = BACKFILL_START_DAYS_AGO - BACKFILL_END_DAYS_AGO;
   console.log("═══ EPL Historical Odds Backfill ═══");
-  console.log(`Backfilling ${HOURS} hourly snapshots (${BACKFILL_DAYS} days)`);
+  console.log(`Backfilling ${HOURS} hourly snapshots (${backfillDays} days: ${BACKFILL_START_DAYS_AGO}d ago → ${BACKFILL_END_DAYS_AGO}d ago)`);
   console.log();
 
   // 1. Build match lookup
@@ -308,7 +310,7 @@ async function main() {
   console.log();
 
   // 2. Loop over hours (round to top of hour for clean timestamps)
-  const rawStart = new Date(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000);
+  const rawStart = new Date(Date.now() - BACKFILL_START_DAYS_AGO * 24 * 60 * 60 * 1000);
   const start = new Date(rawStart);
   start.setUTCMinutes(0, 0, 0);
   let totalRows = 0;
