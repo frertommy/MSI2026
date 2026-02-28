@@ -48,21 +48,23 @@ function computeImpacts(
   opponentElo: number,
   teamPrice: number,
   leagueMean: number,
-  isHome: boolean
+  isHome: boolean,
+  teamWinProb: number,
+  drawProb: number,
+  teamLossProb: number
 ): { win: OutcomeImpact; draw: OutcomeImpact; loss: OutcomeImpact } {
-  // Expected score from this team's perspective
-  const eloDiff = isHome
-    ? opponentElo - teamElo - HOME_ADVANTAGE
-    : opponentElo - teamElo + HOME_ADVANTAGE;
-  const expected = 1 / (1 + Math.pow(10, eloDiff / 400));
+  // Server uses 0/1/3 points scale (not Elo 0/0.5/1):
+  //   actual:   win=3, draw=1, loss=0
+  //   expected: 3*winProb + 1*drawProb + 0*lossProb
+  const expected = 3 * teamWinProb + 1 * drawProb + 0 * teamLossProb;
 
   // Effective K (opponent-weighted)
   const effectiveK = K_BASE * (1 + (opponentElo - leagueMean) / 400);
 
   const outcomes = [
-    { label: "Win", actual: 1.0 },
-    { label: "Draw", actual: 0.5 },
-    { label: "Loss", actual: 0.0 },
+    { label: "Win", actual: 3 },
+    { label: "Draw", actual: 1 },
+    { label: "Loss", actual: 0 },
   ] as const;
 
   const results: Record<string, OutcomeImpact> = {};
@@ -137,24 +139,9 @@ function ImpactRow({ label, delta }: { label: string; delta: number }) {
 }
 
 function MatchCard({ match }: { match: UpcomingMatch }) {
-  const homeImpacts = computeImpacts(
-    match.home_elo,
-    match.away_elo,
-    match.home_price,
-    match.league_mean_elo,
-    true
-  );
-  const awayImpacts = computeImpacts(
-    match.away_elo,
-    match.home_elo,
-    match.away_price,
-    match.league_mean_elo,
-    false
-  );
-
   const modelProbs = computeModelProbs(match.home_elo, match.away_elo);
 
-  // Use bookmaker probabilities if available, else model probs
+  // Use bookmaker probabilities if available, else Elo-derived model probs
   const probs = match.bookmaker_home_prob !== null
     ? {
         home: match.bookmaker_home_prob!,
@@ -162,6 +149,27 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
         away: match.bookmaker_away_prob!,
       }
     : modelProbs;
+
+  const homeImpacts = computeImpacts(
+    match.home_elo,
+    match.away_elo,
+    match.home_price,
+    match.league_mean_elo,
+    true,
+    probs.home,
+    probs.draw,
+    probs.away
+  );
+  const awayImpacts = computeImpacts(
+    match.away_elo,
+    match.home_elo,
+    match.away_price,
+    match.league_mean_elo,
+    false,
+    probs.away,
+    probs.draw,
+    probs.home
+  );
 
   const probSource = match.bookmaker_home_prob !== null ? "odds" : "elo";
 

@@ -69,28 +69,33 @@ async function fetchUpcomingMatches(): Promise<MatchRow[]> {
 
 async function fetchLatestOraclePrices(): Promise<Map<string, { price: number; elo: number; league: string }>> {
   const map = new Map<string, { price: number; elo: number; league: string }>();
-  let from = 0;
-  const pageSize = 1000;
-  while (true) {
-    const { data, error } = await supabase
-      .from("team_prices")
-      .select("team, league, date, dollar_price, implied_elo")
-      .eq("model", "oracle")
-      .order("date", { ascending: false })
-      .range(from, from + pageSize - 1);
-    if (error) {
-      console.error("team_prices fetch error:", error.message);
-      break;
-    }
-    if (!data || data.length === 0) break;
-    for (const row of data as TeamPriceRow[]) {
-      if (!map.has(row.team)) {
-        map.set(row.team, { price: row.dollar_price, elo: row.implied_elo, league: row.league });
-      }
-    }
-    if (data.length < pageSize) break;
-    from += pageSize;
+
+  // Get the most recent oracle date (1 row), then fetch that date only (~96 rows)
+  const { data: latest } = await supabase
+    .from("team_prices")
+    .select("date")
+    .eq("model", "oracle")
+    .order("date", { ascending: false })
+    .limit(1);
+
+  const latestDate = latest?.[0]?.date;
+  if (!latestDate) return map;
+
+  const { data, error } = await supabase
+    .from("team_prices")
+    .select("team, league, dollar_price, implied_elo")
+    .eq("model", "oracle")
+    .eq("date", latestDate);
+
+  if (error) {
+    console.error("team_prices fetch error:", error.message);
+    return map;
   }
+
+  for (const row of data ?? []) {
+    map.set(row.team, { price: row.dollar_price, elo: row.implied_elo, league: (row as TeamPriceRow).league });
+  }
+
   return map;
 }
 

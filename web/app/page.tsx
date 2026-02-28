@@ -7,33 +7,30 @@ import type { Match, TeamRow } from "@/lib/types";
 async function fetchLatestPrices(): Promise<Map<string, { price: number; elo: number }>> {
   const map = new Map<string, { price: number; elo: number }>();
 
-  // team_prices has ~22k rows; paginate to get them all
-  let from = 0;
-  const pageSize = 1000;
+  // Get the most recent oracle date (1 row), then fetch that date only (~96 rows)
+  const { data: latest } = await supabase
+    .from("team_prices")
+    .select("date")
+    .eq("model", "oracle")
+    .order("date", { ascending: false })
+    .limit(1);
 
-  while (true) {
-    const { data, error } = await supabase
-      .from("team_prices")
-      .select("team, date, dollar_price, implied_elo")
-      .eq("model", "oracle")
-      .order("date", { ascending: false })
-      .range(from, from + pageSize - 1);
+  const latestDate = latest?.[0]?.date;
+  if (!latestDate) return map;
 
-    if (error) {
-      console.error("team_prices fetch error:", error.message);
-      break;
-    }
-    if (!data || data.length === 0) break;
+  const { data, error } = await supabase
+    .from("team_prices")
+    .select("team, dollar_price, implied_elo")
+    .eq("model", "oracle")
+    .eq("date", latestDate);
 
-    for (const row of data) {
-      // Only keep the first (most recent) entry per team
-      if (!map.has(row.team)) {
-        map.set(row.team, { price: row.dollar_price, elo: row.implied_elo });
-      }
-    }
+  if (error) {
+    console.error("team_prices fetch error:", error.message);
+    return map;
+  }
 
-    if (data.length < pageSize) break;
-    from += pageSize;
+  for (const row of data ?? []) {
+    map.set(row.team, { price: row.dollar_price, elo: row.implied_elo });
   }
 
   return map;
@@ -57,7 +54,8 @@ async function fetchAllMatches(): Promise<Match[]> {
 async function fetchClosingOdds(): Promise<
   Map<number, { homeProb: number; awayProb: number }>
 > {
-  const map = new Map<number, { homeProb: number; awayProb: number }>();
+  // Accumulate all bookmaker probabilities per fixture, then compute true mean
+  const accum = new Map<number, { homeProbs: number[]; awayProbs: number[] }>();
 
   // Paginate — table has ~28k rows
   let from = 0;
@@ -78,21 +76,25 @@ async function fetchClosingOdds(): Promise<
     for (const row of data) {
       if (!row.home_odds || !row.away_odds || row.home_odds <= 0 || row.away_odds <= 0) continue;
 
-      const homeProb = 1 / row.home_odds;
-      const awayProb = 1 / row.away_odds;
-
-      const existing = map.get(row.fixture_id);
-      if (existing) {
-        // Average across bookmakers
-        existing.homeProb = (existing.homeProb + homeProb) / 2;
-        existing.awayProb = (existing.awayProb + awayProb) / 2;
-      } else {
-        map.set(row.fixture_id, { homeProb, awayProb });
+      if (!accum.has(row.fixture_id)) {
+        accum.set(row.fixture_id, { homeProbs: [], awayProbs: [] });
       }
+      const entry = accum.get(row.fixture_id)!;
+      entry.homeProbs.push(1 / row.home_odds);
+      entry.awayProbs.push(1 / row.away_odds);
     }
 
     if (data.length < pageSize) break;
     from += pageSize;
+  }
+
+  // Compute true mean across all bookmakers per fixture
+  const map = new Map<number, { homeProb: number; awayProb: number }>();
+  for (const [fid, { homeProbs, awayProbs }] of accum) {
+    map.set(fid, {
+      homeProb: homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length,
+      awayProb: awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length,
+    });
   }
 
   return map;
