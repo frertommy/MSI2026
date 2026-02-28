@@ -73,7 +73,9 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Ligue 1": "soccer_france_ligue_one_winner",
 };
 
-export const OUTRIGHT_WEIGHT = 0.15;                    // blend weight into oracle
+// Outright blending disabled — league winner probability creates
+// season-end discontinuity incompatible with continuous perp
+export const OUTRIGHT_WEIGHT = 0;
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 // ─── EMA fast-response layer ────────────────────────────────

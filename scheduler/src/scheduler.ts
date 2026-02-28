@@ -102,15 +102,14 @@ export class Scheduler {
         }
       }
 
-      // 2b. Poll outrights (every 6 hours)
-      if (Date.now() - this.lastOutrightPoll >= OUTRIGHT_POLL_INTERVAL) {
-        if (this.creditTracker.canPoll()) {
-          await pollOutrights(this.lookup!, this.creditTracker);
-          this.lastOutrightPoll = Date.now();
-        } else {
-          log.warn("Skipping outright poll — credit limit reached");
-        }
-      }
+      // 2b. Outright polling disabled — not feeding into model
+      // (OUTRIGHT_WEIGHT = 0; league winner prob creates season-end discontinuity)
+      // if (Date.now() - this.lastOutrightPoll >= OUTRIGHT_POLL_INTERVAL) {
+      //   if (this.creditTracker.canPoll()) {
+      //     await pollOutrights(this.lookup!, this.creditTracker);
+      //     this.lastOutrightPoll = Date.now();
+      //   }
+      // }
 
       // 3. Refresh match scores (every other cycle to save API calls)
       if (this.cycleCount % 2 === 0) {
