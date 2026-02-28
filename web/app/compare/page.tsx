@@ -2,12 +2,23 @@ import { supabase } from "@/lib/supabase";
 import { CompareClient } from "./compare-client";
 
 async function getTeams(): Promise<string[]> {
-  // Fetch only one row per team (latest oracle price) instead of all 22k rows.
-  // Filter to a single model and recent date to minimize the result set.
+  // Fetch the most recent oracle date, then get exactly one row per team
+  // for that date. This returns ~96 rows instead of 22k+.
+  const { data: latest } = await supabase
+    .from("team_prices")
+    .select("date")
+    .eq("model", "oracle")
+    .order("date", { ascending: false })
+    .limit(1);
+
+  const latestDate = latest?.[0]?.date;
+  if (!latestDate) return [];
+
   const { data, error } = await supabase
     .from("team_prices")
     .select("team")
     .eq("model", "oracle")
+    .eq("date", latestDate)
     .order("team");
 
   if (error) {
@@ -15,10 +26,7 @@ async function getTeams(): Promise<string[]> {
     return [];
   }
 
-  // Deduplicate (multiple dates per team, but far fewer rows than all models × all dates)
-  const teams = new Set<string>();
-  for (const r of data ?? []) teams.add(r.team);
-  return [...teams].sort();
+  return (data ?? []).map((r) => r.team);
 }
 
 export const revalidate = 300;
