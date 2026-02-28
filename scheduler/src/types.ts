@@ -61,6 +61,7 @@ export interface TeamPrice {
   dollar_price: number;
   confidence: number;
   matches_in_window: number;
+  drift_elo: number;
 }
 
 export interface MatchProb {
@@ -78,6 +79,16 @@ export interface MatchProb {
   edge_home: number;
   edge_draw: number;
   edge_away: number;
+}
+
+// ─── Drift snapshot type ─────────────────────────────────
+export interface DriftSnapshot {
+  fixture_id: number;
+  bookmaker: string;
+  home_odds: number;
+  away_odds: number;
+  draw_odds: number;
+  snapshot_time: string;
 }
 
 // ─── Service result types ────────────────────────────────────

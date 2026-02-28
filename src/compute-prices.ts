@@ -41,6 +41,7 @@ interface TeamPrice {
   dollar_price: number;
   confidence: number;
   matches_in_window: number;
+  drift_elo: number;
 }
 
 interface MatchProb {
@@ -158,6 +159,20 @@ const PRIOR_PULL = 0.15; // Bayesian pull toward legacy Elo each BT iteration
 const CARRY_DECAY = 0.005; // 0.5%/day toward league mean
 const BATCH_SIZE = 500;
 
+// ─── Odds drift signal constants ────────────────────────────
+const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
+const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
+const DRIFT_FADE_DAYS = 7;      // Days-before-kickoff at which drift reaches full weight
+
+interface DriftSnapshot {
+  fixture_id: number;
+  bookmaker: string;
+  home_odds: number;
+  away_odds: number;
+  draw_odds: number;
+  snapshot_time: string;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────
 function daysBetween(a: string, b: string): number {
   return (new Date(b).getTime() - new Date(a).getTime()) / 86400000;
@@ -227,6 +242,105 @@ async function loadOdds(): Promise<OddsRow[]> {
     from += pageSize;
   }
   return all;
+}
+
+// ─── Load ALL odds snapshots for drift signal ───────────────
+async function loadAllOddsForDrift(): Promise<Map<number, DriftSnapshot[]>> {
+  const all: DriftSnapshot[] = [];
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await sb
+      .from("odds_snapshots")
+      .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`drift odds: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const r of data) {
+      if (!r.home_odds || !r.away_odds || !r.snapshot_time) continue;
+      all.push(r as DriftSnapshot);
+    }
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  // Group by fixture_id
+  const map = new Map<number, DriftSnapshot[]>();
+  for (const s of all) {
+    if (!map.has(s.fixture_id)) map.set(s.fixture_id, []);
+    map.get(s.fixture_id)!.push(s);
+  }
+  return map;
+}
+
+// ─── Odds drift signal ──────────────────────────────────────
+function computeDriftForDate(
+  date: string,
+  matches: Match[],
+  driftOdds: Map<number, DriftSnapshot[]>
+): Map<string, number> {
+  const driftMap = new Map<string, number>();
+  const cutoff = addDays(date, 14);
+
+  // Find upcoming matches (within next 14 days)
+  const upcoming = matches.filter((m) => m.date > date && m.date <= cutoff);
+
+  for (const match of upcoming) {
+    const snapshots = driftOdds.get(match.fixture_id);
+    if (!snapshots || snapshots.length < 2) continue;
+
+    // Filter to snapshots taken on or before processing date
+    const available = snapshots.filter(
+      (s) => s.snapshot_time.slice(0, 10) <= date
+    );
+    if (available.length < 2) continue;
+
+    // Prefer Pinnacle, fall back to all bookmakers
+    const pinnacle = available.filter((s) => s.bookmaker === "pinnacle");
+    const selected = pinnacle.length >= 2 ? pinnacle : available;
+
+    // Sort by snapshot_time
+    selected.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
+
+    const earliest = selected[0];
+    const latest = selected[selected.length - 1];
+
+    // Check minimum time gap
+    const hoursDiff =
+      (new Date(latest.snapshot_time).getTime() -
+        new Date(earliest.snapshot_time).getTime()) /
+      3600000;
+    if (hoursDiff < DRIFT_MIN_HOURS) continue;
+
+    // Proximity weight: far-out matches get full weight, tomorrow's get zero
+    const daysBefore = daysBetween(date, match.date);
+    const weight = Math.max(0, Math.min(1, (daysBefore - 1) / DRIFT_FADE_DAYS));
+    if (weight <= 0) continue;
+
+    // Home team drift
+    if (earliest.home_odds > 0 && latest.home_odds > 0) {
+      const earlyProb = 1 / earliest.home_odds;
+      const lateProb = 1 / latest.home_odds;
+      const homeDrift = DRIFT_SCALE * (lateProb - earlyProb) * weight;
+      driftMap.set(
+        match.home_team,
+        (driftMap.get(match.home_team) ?? 0) + homeDrift
+      );
+    }
+
+    // Away team drift
+    if (earliest.away_odds > 0 && latest.away_odds > 0) {
+      const earlyProb = 1 / earliest.away_odds;
+      const lateProb = 1 / latest.away_odds;
+      const awayDrift = DRIFT_SCALE * (lateProb - earlyProb) * weight;
+      driftMap.set(
+        match.away_team,
+        (driftMap.get(match.away_team) ?? 0) + awayDrift
+      );
+    }
+  }
+
+  return driftMap;
 }
 
 // ─── Fetch legacy MSI starting Elos ──────────────────────────
@@ -620,12 +734,13 @@ async function insertBatched(
 // ─── Main ────────────────────────────────────────────────────
 async function main() {
   console.log("Loading data from Supabase...");
-  const [matches, odds, legacyElos] = await Promise.all([
+  const [matches, odds, legacyElos, allDriftOdds] = await Promise.all([
     loadMatches(),
     loadOdds(),
     fetchLegacyElos(),
+    loadAllOddsForDrift(),
   ]);
-  console.log(`  ${matches.length} matches, ${odds.length} odds rows`);
+  console.log(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots`);
 
   // All teams and leagues
   const allTeams = new Set<string>();
@@ -761,13 +876,19 @@ async function main() {
       }
     }
 
+    // Odds drift signal for this date
+    const driftMap = computeDriftForDate(date, matches, allDriftOdds);
+
     // Generate prices for each team (global center = INITIAL_ELO)
     for (const team of allTeams) {
       const league = teamLeague.get(team)!;
       const mInW = matchesInWindow.get(team) ?? 0;
+      const drift = driftMap.get(team) ?? 0;
+      const driftRounded = Math.round(drift * 10) / 10;
 
-      // Oracle A — smooth (median BT, no shocks)
-      const eloSmooth = ratingsMedian.get(team) ?? INITIAL_ELO;
+      // Oracle A — smooth (median BT + drift, no shocks)
+      const eloSmoothBase = ratingsMedian.get(team) ?? INITIAL_ELO;
+      const eloSmooth = eloSmoothBase + drift;
       const priceSmooth = logistic(eloSmooth, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "smooth",
@@ -775,11 +896,12 @@ async function main() {
         dollar_price: Math.round(priceSmooth * 100) / 100,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
+        drift_elo: driftRounded,
       });
 
-      // Oracle B — reactive (median BT + shock boost K=32, HL=7)
+      // Oracle B — reactive (median BT + shock boost + drift)
       const shockBoost = activeShockBoost(team, date, shocks, SHOCK_HALF_LIFE);
-      const eloReactive = eloSmooth + shockBoost;
+      const eloReactive = eloSmoothBase + shockBoost + drift;
       const priceReactive = logistic(eloReactive, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "reactive",
@@ -787,10 +909,12 @@ async function main() {
         dollar_price: Math.round(priceReactive * 100) / 100,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
+        drift_elo: driftRounded,
       });
 
-      // Oracle C — sharp (pinnacle BT, no shocks)
-      const eloSharp = ratingsPinnacle.get(team) ?? INITIAL_ELO;
+      // Oracle C — sharp (pinnacle BT + drift, no shocks)
+      const eloSharpBase = ratingsPinnacle.get(team) ?? INITIAL_ELO;
+      const eloSharp = eloSharpBase + drift;
       const priceSharp = logistic(eloSharp, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "sharp",
@@ -798,11 +922,12 @@ async function main() {
         dollar_price: Math.round(priceSharp * 100) / 100,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
+        drift_elo: driftRounded,
       });
 
-      // Oracle D — oracle (pinnacle BT + shocks K=20, HL=10)
+      // Oracle D — oracle (pinnacle BT + shocks + drift)
       const oracleBoost = activeShockBoost(team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
-      const eloOracle = eloSharp + oracleBoost;
+      const eloOracle = eloSharpBase + oracleBoost + drift;
       const priceOracle = logistic(eloOracle, INITIAL_ELO, DOLLAR_SPREAD);
       teamPriceRows.push({
         team, league, date, model: "oracle",
@@ -810,6 +935,7 @@ async function main() {
         dollar_price: Math.round(priceOracle * 100) / 100,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
+        drift_elo: driftRounded,
       });
     }
 
@@ -821,28 +947,34 @@ async function main() {
 
       for (const model of ["smooth", "reactive", "sharp", "oracle"] as const) {
         let homeElo: number, awayElo: number;
+        const homeDrift = driftMap.get(m.home_team) ?? 0;
+        const awayDrift = driftMap.get(m.away_team) ?? 0;
 
         if (model === "smooth") {
-          homeElo = ratingsMedian.get(m.home_team) ?? INITIAL_ELO;
-          awayElo = ratingsMedian.get(m.away_team) ?? INITIAL_ELO;
+          homeElo = (ratingsMedian.get(m.home_team) ?? INITIAL_ELO) + homeDrift;
+          awayElo = (ratingsMedian.get(m.away_team) ?? INITIAL_ELO) + awayDrift;
         } else if (model === "reactive") {
           homeElo =
             (ratingsMedian.get(m.home_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.home_team, date, shocks, SHOCK_HALF_LIFE);
+            activeShockBoost(m.home_team, date, shocks, SHOCK_HALF_LIFE) +
+            homeDrift;
           awayElo =
             (ratingsMedian.get(m.away_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.away_team, date, shocks, SHOCK_HALF_LIFE);
+            activeShockBoost(m.away_team, date, shocks, SHOCK_HALF_LIFE) +
+            awayDrift;
         } else if (model === "sharp") {
-          homeElo = ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO;
-          awayElo = ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO;
+          homeElo = (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) + homeDrift;
+          awayElo = (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) + awayDrift;
         } else {
-          // oracle: pinnacle BT + oracle shocks
+          // oracle: pinnacle BT + oracle shocks + drift
           homeElo =
             (ratingsPinnacle.get(m.home_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.home_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
+            activeShockBoost(m.home_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE) +
+            homeDrift;
           awayElo =
             (ratingsPinnacle.get(m.away_team) ?? INITIAL_ELO) +
-            activeShockBoost(m.away_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE);
+            activeShockBoost(m.away_team, date, oracleShocks, ORACLE_SHOCK_HALF_LIFE) +
+            awayDrift;
         }
 
         const raw = matchProbsFromElo(homeElo, awayElo, homeAdv);

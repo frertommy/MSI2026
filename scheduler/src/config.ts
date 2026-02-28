@@ -63,3 +63,8 @@ export const CARRY_DECAY = 0.005;
 export const DOLLAR_SPREAD = 220;
 export const ORACLE_WEIGHT = 0.7;
 export const BATCH_SIZE = 500;
+
+// ─── Odds drift signal constants ────────────────────────────
+export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
+export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
+export const DRIFT_FADE_DAYS = 7;      // Days-before-kickoff at which drift reaches full weight
