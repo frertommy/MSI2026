@@ -60,6 +60,7 @@ export interface TeamPrice {
   model: string;
   implied_elo: number;
   dollar_price: number;
+  raw_dollar_price: number | null;
   confidence: number;
   matches_in_window: number;
   drift_elo: number;

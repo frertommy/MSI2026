@@ -26,6 +26,7 @@ import {
   DRIFT_MIN_HOURS,
   DRIFT_FADE_DAYS,
   OUTRIGHT_WEIGHT,
+  EMA_ALPHA,
 } from "../config.js";
 import type {
   Match,
@@ -719,6 +720,9 @@ export async function runPricingEngine(options?: {
   const teamPriceRows: TeamPrice[] = [];
   const matchProbRows: MatchProb[] = [];
 
+  // EMA state: key = "team|model", value = previous day's EMA dollar price
+  const prevEma = new Map<string, number>();
+
   const lastMatchDate = new Map<string, string>();
   const matchesByDate = new Map<string, Match[]>();
   for (const m of matches) {
@@ -816,13 +820,21 @@ export async function runPricingEngine(options?: {
       // Smooth
       const eloSmoothBase = ratingsMedian.get(team) ?? INITIAL_ELO;
       const eloSmooth = eloSmoothBase + drift;
+      const rawSmooth = Math.round(logistic(eloSmooth, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100;
+      const emaKeySmooth = `${team}|smooth`;
+      const prevEmaSmooth = prevEma.get(emaKeySmooth);
+      const emaSmooth = prevEmaSmooth !== undefined
+        ? Math.round((EMA_ALPHA * rawSmooth + (1 - EMA_ALPHA) * prevEmaSmooth) * 100) / 100
+        : rawSmooth;
+      prevEma.set(emaKeySmooth, emaSmooth);
       teamPriceRows.push({
         team,
         league,
         date,
         model: "smooth",
         implied_elo: Math.round(eloSmooth * 10) / 10,
-        dollar_price: Math.round(logistic(eloSmooth, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100,
+        dollar_price: emaSmooth,
+        raw_dollar_price: rawSmooth,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -836,14 +848,21 @@ export async function runPricingEngine(options?: {
         SHOCK_HALF_LIFE
       );
       const eloReactive = eloSmoothBase + shockBoost + drift;
+      const rawReactive = Math.round(logistic(eloReactive, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100;
+      const emaKeyReactive = `${team}|reactive`;
+      const prevEmaReactive = prevEma.get(emaKeyReactive);
+      const emaReactive = prevEmaReactive !== undefined
+        ? Math.round((EMA_ALPHA * rawReactive + (1 - EMA_ALPHA) * prevEmaReactive) * 100) / 100
+        : rawReactive;
+      prevEma.set(emaKeyReactive, emaReactive);
       teamPriceRows.push({
         team,
         league,
         date,
         model: "reactive",
         implied_elo: Math.round(eloReactive * 10) / 10,
-        dollar_price:
-          Math.round(logistic(eloReactive, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100,
+        dollar_price: emaReactive,
+        raw_dollar_price: rawReactive,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -852,14 +871,21 @@ export async function runPricingEngine(options?: {
       // Sharp
       const eloSharpBase = ratingsPinnacle.get(team) ?? INITIAL_ELO;
       const eloSharp = eloSharpBase + drift;
+      const rawSharp = Math.round(logistic(eloSharp, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100;
+      const emaKeySharp = `${team}|sharp`;
+      const prevEmaSharp = prevEma.get(emaKeySharp);
+      const emaSharp = prevEmaSharp !== undefined
+        ? Math.round((EMA_ALPHA * rawSharp + (1 - EMA_ALPHA) * prevEmaSharp) * 100) / 100
+        : rawSharp;
+      prevEma.set(emaKeySharp, emaSharp);
       teamPriceRows.push({
         team,
         league,
         date,
         model: "sharp",
         implied_elo: Math.round(eloSharp * 10) / 10,
-        dollar_price:
-          Math.round(logistic(eloSharp, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100,
+        dollar_price: emaSharp,
+        raw_dollar_price: rawSharp,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,
@@ -877,14 +903,21 @@ export async function runPricingEngine(options?: {
         ? (1 - OUTRIGHT_WEIGHT) * eloSharpBase + OUTRIGHT_WEIGHT * outrightElo
         : eloSharpBase;
       const eloOracle = blendedSharpBase + oracleBoost + drift;
+      const rawOracle = Math.round(logistic(eloOracle, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100;
+      const emaKeyOracle = `${team}|oracle`;
+      const prevEmaOracle = prevEma.get(emaKeyOracle);
+      const emaOracle = prevEmaOracle !== undefined
+        ? Math.round((EMA_ALPHA * rawOracle + (1 - EMA_ALPHA) * prevEmaOracle) * 100) / 100
+        : rawOracle;
+      prevEma.set(emaKeyOracle, emaOracle);
       teamPriceRows.push({
         team,
         league,
         date,
         model: "oracle",
         implied_elo: Math.round(eloOracle * 10) / 10,
-        dollar_price:
-          Math.round(logistic(eloOracle, INITIAL_ELO, DOLLAR_SPREAD) * 100) / 100,
+        dollar_price: emaOracle,
+        raw_dollar_price: rawOracle,
         confidence: Math.min(1, mInW / 10),
         matches_in_window: mInW,
         drift_elo: driftRounded,

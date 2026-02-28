@@ -76,6 +76,10 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
 export const OUTRIGHT_WEIGHT = 0.15;                    // blend weight into oracle
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
+// ─── EMA fast-response layer ────────────────────────────────
+export const EMA_SPAN = 5;                         // 5-day EMA
+export const EMA_ALPHA = 2 / (EMA_SPAN + 1);      // ≈ 0.333
+
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
