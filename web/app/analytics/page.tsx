@@ -392,10 +392,24 @@ export default async function AnalyticsPage() {
           <h1 className="text-lg font-bold tracking-wider text-foreground uppercase">
             Model Analytics
           </h1>
-          <span className="text-xs text-muted font-mono ml-auto">
-            {prices.length} prices &middot; {probs.length} predictions &middot;{" "}
-            {matches.length} matches
-          </span>
+          <div className="flex items-center gap-4 ml-auto">
+            <a
+              href="/matches"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Matches &rarr;
+            </a>
+            <a
+              href="/v2"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              V2 Pricing &rarr;
+            </a>
+            <span className="text-xs text-muted font-mono">
+              {prices.length} prices &middot; {probs.length} predictions &middot;{" "}
+              {matches.length} matches
+            </span>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">

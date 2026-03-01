@@ -234,6 +234,12 @@ export default async function Home() {
             >
               Analytics &rarr;
             </a>
+            <a
+              href="/v2"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              V2 Pricing &rarr;
+            </a>
             <span className="text-xs text-muted font-mono">
               {teams.length} teams &middot; {matches.length} matches &middot;{" "}
               {oddsMap.size} odds fixtures

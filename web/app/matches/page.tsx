@@ -239,9 +239,23 @@ export default async function MatchesPage() {
           <h1 className="text-lg font-bold tracking-wider text-foreground uppercase">
             Upcoming Matches
           </h1>
-          <span className="text-xs text-muted font-mono ml-auto">
-            {matches.length} fixtures
-          </span>
+          <div className="flex items-center gap-4 ml-auto">
+            <a
+              href="/analytics"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Analytics &rarr;
+            </a>
+            <a
+              href="/v2"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              V2 Pricing &rarr;
+            </a>
+            <span className="text-xs text-muted font-mono">
+              {matches.length} fixtures
+            </span>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
