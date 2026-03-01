@@ -492,28 +492,11 @@ export async function matchPolymarketToFixtures(
     const fixtureId = matchEventToFixture(fakeEvent, lookup);
     if (fixtureId === null) continue;
 
-    // Look up the UUID `id` from the matches table — polymarket_match_odds.fixture_id
-    // is UUID type (references matches.id), NOT the integer fixture_id
-    const { data: matchRow, error: lookupErr } = await sb
-      .from("matches")
-      .select("id")
-      .eq("fixture_id", fixtureId)
-      .limit(1)
-      .single();
-
-    if (lookupErr || !matchRow) {
-      log.debug(
-        `No UUID found for fixture_id ${fixtureId} — skipping Polymarket link`
-      );
-      continue;
-    }
-
-    const matchUuid = matchRow.id as string;
-
-    // Update all rows for this polymarket_event_id with the UUID
+    // Write the integer fixture_id directly — column is now bigint,
+    // matching matches.fixture_id and odds_snapshots.fixture_id
     const { error: updateErr } = await sb
       .from("polymarket_match_odds")
-      .update({ fixture_id: matchUuid })
+      .update({ fixture_id: fixtureId })
       .eq("polymarket_event_id", ev.polymarket_event_id);
 
     if (updateErr) {
@@ -524,7 +507,7 @@ export async function matchPolymarketToFixtures(
     } else {
       matchedCount++;
       log.debug(
-        `Matched Polymarket ${ev.event_title} → fixture ${matchUuid} (fixture_id ${fixtureId})`
+        `Matched Polymarket ${ev.event_title} → fixture ${fixtureId}`
       );
     }
   }
