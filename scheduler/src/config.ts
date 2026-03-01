@@ -103,6 +103,12 @@ export const POLYMARKET_FUTURES_SLUGS: Record<string, string> = {
   "Ligue 1": "french-ligue-1-winner",
 };
 
+// ─── Understat xG integration ────────────────────────────────
+export const XG_ENABLED = true;
+export const XG_POLL_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+export const XG_FLOOR = 0.4;                         // min shock multiplier (lucky win)
+export const XG_CEILING = 1.8;                       // max shock multiplier (dominant win)
+
 // ─── Odds drift signal constants ────────────────────────────
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot

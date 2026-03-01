@@ -6,6 +6,8 @@ import {
   HOURLY_POLL_INTERVAL,
   DAILY_CREDIT_SAFETY,
   POLYMARKET_POLL_INTERVAL,
+  XG_ENABLED,
+  XG_POLL_INTERVAL,
 } from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
@@ -18,6 +20,7 @@ import {
 } from "./services/polymarket-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
 import { runPricingEngine } from "./services/pricing-engine.js";
+import { pollUnderstatXg } from "./services/understat-poller.js";
 import { CreditTracker } from "./services/credit-tracker.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
 import type { PollResult } from "./types.js";
@@ -33,6 +36,7 @@ export class Scheduler {
   private lastOutrightPoll = 0;
   private lastHourlyPoll = 0;
   private lastPolymarketPoll = 0;
+  private lastUnderstatPoll = 0;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -140,6 +144,22 @@ export class Scheduler {
         await refreshMatches();
         // Rebuild lookup after new matches
         this.lookup = await buildTeamLookup();
+      }
+
+      // 3b. Poll Understat xG (every 4 hours — free, no auth)
+      if (
+        XG_ENABLED &&
+        Date.now() - this.lastUnderstatPoll >= XG_POLL_INTERVAL
+      ) {
+        try {
+          await pollUnderstatXg();
+          this.lastUnderstatPoll = Date.now();
+        } catch (err) {
+          log.warn(
+            "Understat xG poll failed",
+            err instanceof Error ? err.message : err
+          );
+        }
       }
 
       // 4. Run pricing engine

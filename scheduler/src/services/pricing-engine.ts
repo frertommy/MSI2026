@@ -27,7 +27,11 @@ import {
   DRIFT_FADE_DAYS,
   OUTRIGHT_WEIGHT,
   EMA_ALPHA,
+  XG_ENABLED,
+  XG_FLOOR,
+  XG_CEILING,
 } from "../config.js";
+import { loadXgData, type XgEntry } from "./understat-poller.js";
 import type {
   Match,
   OddsRow,
@@ -487,12 +491,32 @@ interface Shock {
   amount: number;
 }
 
+/**
+ * Compute xG alignment multiplier for a team in a match.
+ * - If the team dominated on xG AND won → multiplier > 1 (amplify shock)
+ * - If the team was outplayed on xG but won → multiplier < 1 (dampen shock)
+ * - If no xG data → multiplier = 1.0 (graceful degradation)
+ */
+function xgMultiplier(
+  teamXg: number,
+  opponentXg: number,
+  goalDiff: number
+): number {
+  const xgDiff = teamXg - opponentXg;
+  const sign = goalDiff > 0 ? 1 : goalDiff < 0 ? -1 : 0;
+  // For draws (sign=0), multiplier stays at 1.0 — no alignment signal
+  const raw = 1.0 + 0.3 * xgDiff * sign;
+  return Math.max(XG_FLOOR, Math.min(XG_CEILING, raw));
+}
+
 function computeShocks(
   matches: Match[],
   normalizedOdds: Map<number, NormalizedOdds>,
   kBase: number,
   startingElos: Map<string, number>,
-  teamLeague: Map<string, string>
+  teamLeague: Map<string, string>,
+  xgByFixtureId?: Map<number, XgEntry>,
+  xgByKey?: Map<string, XgEntry>
 ): Shock[] {
   // League means for K-weighting
   const leagueTeams = new Map<string, string[]>();
@@ -509,6 +533,7 @@ function computeShocks(
   }
 
   const shocks: Shock[] = [];
+  let xgApplied = 0;
 
   for (const m of matches) {
     const odds = normalizedOdds.get(m.fixture_id);
@@ -519,8 +544,28 @@ function computeShocks(
     const ag = parseInt(parts[1]);
     if (isNaN(hg) || isNaN(ag)) continue;
 
+    // Look up xG data: fixture_id first, then date|home|away fallback
+    let xg: XgEntry | undefined;
+    if (XG_ENABLED && xgByFixtureId && xgByKey) {
+      xg = xgByFixtureId.get(m.fixture_id);
+      if (!xg) {
+        const key = `${m.date}|${m.home_team}|${m.away_team}`;
+        xg = xgByKey.get(key);
+      }
+    }
+
     const league = teamLeague.get(m.home_team) ?? "";
     const lMean = leagueMeanElo.get(league) ?? INITIAL_ELO;
+
+    // Compute xG multipliers (1.0 if no data)
+    let homeMult = 1.0;
+    let awayMult = 1.0;
+    if (xg) {
+      const goalDiff = hg - ag;
+      homeMult = xgMultiplier(xg.home_xg, xg.away_xg, goalDiff);
+      awayMult = xgMultiplier(xg.away_xg, xg.home_xg, -goalDiff);
+      xgApplied++;
+    }
 
     // Home
     const awayElo = startingElos.get(m.away_team) ?? INITIAL_ELO;
@@ -528,11 +573,16 @@ function computeShocks(
     const homeActual = hg > ag ? 3 : hg === ag ? 1 : 0;
     const homeExpected =
       3 * odds.homeProb + 1 * odds.drawProb + 0 * odds.awayProb;
-    shocks.push({
-      team: m.home_team,
-      date: m.date,
-      amount: (homeActual - homeExpected) * homeEffK,
-    });
+    const homeShock = (homeActual - homeExpected) * homeEffK * homeMult;
+
+    // Log when xG adjusts shock by more than 20%
+    if (xg && Math.abs(homeMult - 1.0) > 0.2) {
+      log.debug(
+        `xG shock adj: ${m.home_team} mult=${homeMult.toFixed(2)} (xG ${xg.home_xg.toFixed(2)}-${xg.away_xg.toFixed(2)}, score ${hg}-${ag})`
+      );
+    }
+
+    shocks.push({ team: m.home_team, date: m.date, amount: homeShock });
 
     // Away
     const homeElo = startingElos.get(m.home_team) ?? INITIAL_ELO;
@@ -540,11 +590,19 @@ function computeShocks(
     const awayActual = ag > hg ? 3 : ag === hg ? 1 : 0;
     const awayExpected =
       3 * odds.awayProb + 1 * odds.drawProb + 0 * odds.homeProb;
-    shocks.push({
-      team: m.away_team,
-      date: m.date,
-      amount: (awayActual - awayExpected) * awayEffK,
-    });
+    const awayShock = (awayActual - awayExpected) * awayEffK * awayMult;
+
+    if (xg && Math.abs(awayMult - 1.0) > 0.2) {
+      log.debug(
+        `xG shock adj: ${m.away_team} mult=${awayMult.toFixed(2)} (xG ${xg.away_xg.toFixed(2)}-${xg.home_xg.toFixed(2)}, score ${ag}-${hg})`
+      );
+    }
+
+    shocks.push({ team: m.away_team, date: m.date, amount: awayShock });
+  }
+
+  if (xgApplied > 0) {
+    log.info(`  xG scaling applied to ${xgApplied}/${matches.length} matches`);
   }
 
   return shocks;
@@ -667,14 +725,15 @@ export async function runPricingEngine(options?: {
 
   log.info(`Pricing engine: ${START_DATE} → ${END_DATE}`);
 
-  const [matches, odds, legacyElos, allDriftOdds, outrightElos] = await Promise.all([
+  const [matches, odds, legacyElos, allDriftOdds, outrightElos, xgData] = await Promise.all([
     loadMatches(),
     loadOdds(),
     fetchLegacyElos(),
     loadDriftOdds(),
     loadOutrightOdds(),
+    XG_ENABLED ? loadXgData() : Promise.resolve({ byFixtureId: new Map<number, XgEntry>(), byKey: new Map<string, XgEntry>() }),
   ]);
-  log.info(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots, ${outrightElos.size} outright Elos`);
+  log.info(`  ${matches.length} matches, ${odds.length} odds rows, ${allDriftOdds.size} fixtures with drift snapshots, ${outrightElos.size} outright Elos, ${xgData.byFixtureId.size} xG entries`);
 
   // All teams and leagues
   const allTeams = new Set<string>();
@@ -697,20 +756,24 @@ export async function runPricingEngine(options?: {
     `  Median: ${medianOdds.size} fixtures, Pinnacle: ${pinnacleOdds.size} fixtures`
   );
 
-  // Shocks
+  // Shocks (with xG scaling when available)
   const reactiveShocks = computeShocks(
     matches,
     medianOdds,
     SHOCK_K,
     startingElos,
-    teamLeague
+    teamLeague,
+    xgData.byFixtureId,
+    xgData.byKey
   );
   const oracleShocks = computeShocks(
     matches,
     pinnacleOdds,
     ORACLE_SHOCK_K,
     startingElos,
-    teamLeague
+    teamLeague,
+    xgData.byFixtureId,
+    xgData.byKey
   );
 
   // Date range
