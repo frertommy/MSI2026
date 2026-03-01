@@ -41,6 +41,7 @@ function logistic(elo: number): number {
 interface OutcomeImpact {
   label: string;
   delta: number;
+  pctDelta: number;
 }
 
 function computeImpacts(
@@ -73,7 +74,8 @@ function computeImpacts(
     const newElo = teamElo + effectiveK * surprise;
     const newPrice = logistic(newElo);
     const delta = Math.round((newPrice - teamPrice) * 100) / 100;
-    results[o.label.toLowerCase()] = { label: o.label, delta };
+    const pctDelta = teamPrice > 0 ? Math.round((delta / teamPrice) * 10000) / 100 : 0;
+    results[o.label.toLowerCase()] = { label: o.label, delta, pctDelta };
   }
 
   return results as { win: OutcomeImpact; draw: OutcomeImpact; loss: OutcomeImpact };
@@ -109,6 +111,11 @@ function formatDelta(delta: number): string {
   return `${prefix}$${delta.toFixed(2)}`;
 }
 
+function formatPctDelta(pct: number): string {
+  const prefix = pct > 0 ? "+" : "";
+  return `${prefix}${pct.toFixed(1)}%`;
+}
+
 function formatPct(prob: number): string {
   return `${(prob * 100).toFixed(0)}%`;
 }
@@ -124,13 +131,16 @@ function formatDate(dateStr: string): string {
 }
 
 // ─── Components ──────────────────────────────────────────────
-function ImpactRow({ label, delta }: { label: string; delta: number }) {
+function ImpactRow({ label, delta, pctDelta }: { label: string; delta: number; pctDelta: number }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[11px] text-muted">{label}</span>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(delta)}`}>
           {formatDelta(delta)}
+        </span>
+        <span className={`text-[10px] font-mono tabular-nums ${deltaColor(delta)} opacity-60`}>
+          {formatPctDelta(pctDelta)}
         </span>
         <span className={`text-[10px] ${deltaColor(delta)}`}>{deltaArrow(delta)}</span>
       </div>
@@ -201,9 +211,9 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
               </div>
             </div>
             <div className="space-y-1 border-t border-border/30 pt-2">
-              <ImpactRow label={`${match.home_team.split(" ").pop()} Win`} delta={homeImpacts.win.delta} />
-              <ImpactRow label="Draw" delta={homeImpacts.draw.delta} />
-              <ImpactRow label={`${match.home_team.split(" ").pop()} Loss`} delta={homeImpacts.loss.delta} />
+              <ImpactRow label={`${match.home_team.split(" ").pop()} Win`} delta={homeImpacts.win.delta} pctDelta={homeImpacts.win.pctDelta} />
+              <ImpactRow label="Draw" delta={homeImpacts.draw.delta} pctDelta={homeImpacts.draw.pctDelta} />
+              <ImpactRow label={`${match.home_team.split(" ").pop()} Loss`} delta={homeImpacts.loss.delta} pctDelta={homeImpacts.loss.pctDelta} />
             </div>
           </div>
 
@@ -223,6 +233,9 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
             <div className="space-y-1 border-t border-border/30 pt-2">
               <div className="flex items-center justify-between gap-2">
                 <span className={`text-[10px] ${deltaColor(awayImpacts.win.delta)}`}>{deltaArrow(awayImpacts.win.delta)}</span>
+                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.win.delta)} opacity-60`}>
+                  {formatPctDelta(awayImpacts.win.pctDelta)}
+                </span>
                 <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.win.delta)}`}>
                   {formatDelta(awayImpacts.win.delta)}
                 </span>
@@ -230,6 +243,9 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className={`text-[10px] ${deltaColor(awayImpacts.draw.delta)}`}>{deltaArrow(awayImpacts.draw.delta)}</span>
+                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.draw.delta)} opacity-60`}>
+                  {formatPctDelta(awayImpacts.draw.pctDelta)}
+                </span>
                 <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.draw.delta)}`}>
                   {formatDelta(awayImpacts.draw.delta)}
                 </span>
@@ -237,6 +253,9 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className={`text-[10px] ${deltaColor(awayImpacts.loss.delta)}`}>{deltaArrow(awayImpacts.loss.delta)}</span>
+                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.loss.delta)} opacity-60`}>
+                  {formatPctDelta(awayImpacts.loss.pctDelta)}
+                </span>
                 <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.loss.delta)}`}>
                   {formatDelta(awayImpacts.loss.delta)}
                 </span>
