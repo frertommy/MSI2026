@@ -97,9 +97,9 @@ export const POLYMARKET_SERIES_IDS: Record<string, string> = {
 export const POLYMARKET_POLL_INTERVAL = 10 * 60 * 1000; // 10 minutes
 export const POLYMARKET_FUTURES_SLUGS: Record<string, string> = {
   "Premier League": "english-premier-league-winner",
-  "La Liga": "la-liga-winner",
-  Bundesliga: "bundesliga-winner",
-  "Serie A": "serie-a-winner",
+  "La Liga": "la-liga-winner-114",
+  Bundesliga: "bundesliga-winner-527",
+  "Serie A": "serie-a-league-winner",
   "Ligue 1": "french-ligue-1-winner",
 };
 
