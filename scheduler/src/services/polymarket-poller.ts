@@ -226,12 +226,17 @@ export async function pollPolymarketMatches(): Promise<{
           }
 
           if (homeProb > 0 || drawProb > 0 || awayProb > 0) {
+            const maxProb = Math.max(homeProb, drawProb, awayProb);
+            const minProb = Math.min(homeProb, drawProb, awayProb);
+            const resolved = maxProb >= 0.99 || minProb <= 0.001;
+
             allRows.push({
               league,
               event_title: event.title,
               polymarket_event_id: eventId,
               market_type: "moneyline",
               market_question: event.title,
+              market_status: resolved ? "resolved" : "active",
               outcomes: [homeTeam, "Draw", awayTeam],
               outcome_prices: [
                 Math.round(homeProb * 10000) / 10000,
@@ -261,12 +266,16 @@ export async function pollPolymarketMatches(): Promise<{
               continue;
             }
 
+            const yesPrice = prices[0] ?? 0;
+            const mktResolved = yesPrice >= 0.995 || yesPrice <= 0.005;
+
             allRows.push({
               league,
               event_title: event.title,
               polymarket_event_id: eventId,
               market_type: marketType,
               market_question: mkt.question,
+              market_status: mktResolved ? "resolved" : "active",
               outcomes,
               outcome_prices: prices,
               volume: Math.round((mkt.volumeNum || 0) * 100) / 100,
