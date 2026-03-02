@@ -160,7 +160,7 @@ async function fetchAll<T>(
 // ─── Fetch legacy Elos from GitHub ─────────────────────────
 async function fetchLegacyElos(): Promise<Record<string, number>> {
   try {
-    const res = await fetch(LEGACY_URL, { next: { revalidate: 3600 } });
+    const res = await fetch(LEGACY_URL, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: Record<string, Array<{ date: string; rating: number }>> =
       await res.json();
@@ -179,8 +179,10 @@ async function fetchLegacyElos(): Promise<Record<string, number>> {
   }
 }
 
-// ─── Fetch closing odds and compute consensus ──────────────
-async function fetchClosingOddsConsensus(): Promise<OddsConsensus[]> {
+// ─── Fetch closing odds by fixture batches (fast) ───────────
+async function fetchClosingOddsConsensus(
+  fixtureIds: number[]
+): Promise<OddsConsensus[]> {
   interface OddsRow {
     fixture_id: number;
     home_odds: number | null;
@@ -188,23 +190,35 @@ async function fetchClosingOddsConsensus(): Promise<OddsConsensus[]> {
     draw_odds: number | null;
   }
 
-  const rawOdds = await fetchAll<OddsRow>(
-    "odds_snapshots",
-    "fixture_id, home_odds, away_odds, draw_odds",
-    { days_before_kickoff: 1 }
-  );
-
   const grouped = new Map<number, { home: number[]; draw: number[]; away: number[] }>();
-  for (const row of rawOdds) {
-    if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
-    if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
-    if (!grouped.has(row.fixture_id)) {
-      grouped.set(row.fixture_id, { home: [], draw: [], away: [] });
+
+  // Batch by 100 fixture IDs at a time — much faster than scanning whole table
+  const BATCH = 100;
+  for (let i = 0; i < fixtureIds.length; i += BATCH) {
+    const batch = fixtureIds.slice(i, i + BATCH);
+    const { data, error } = await supabase
+      .from("odds_snapshots")
+      .select("fixture_id, home_odds, away_odds, draw_odds")
+      .in("fixture_id", batch)
+      .eq("days_before_kickoff", 1);
+
+    if (error) {
+      console.error("odds batch error:", error.message);
+      continue;
     }
-    const entry = grouped.get(row.fixture_id)!;
-    entry.home.push(1 / row.home_odds);
-    entry.draw.push(1 / row.draw_odds);
-    entry.away.push(1 / row.away_odds);
+    if (!data) continue;
+
+    for (const row of data as OddsRow[]) {
+      if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+      if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
+      if (!grouped.has(row.fixture_id)) {
+        grouped.set(row.fixture_id, { home: [], draw: [], away: [] });
+      }
+      const entry = grouped.get(row.fixture_id)!;
+      entry.home.push(1 / row.home_odds);
+      entry.draw.push(1 / row.draw_odds);
+      entry.away.push(1 / row.away_odds);
+    }
   }
 
   const result: OddsConsensus[] = [];
@@ -460,7 +474,8 @@ function computeV2Prices(
 export const dynamic = "force-dynamic"; // skip build-time generation (heavy V2 computation + large odds queries)
 
 export default async function V3Page() {
-  const [legacyElos, matches, oddsConsensus, priceHistory, xgData] =
+  // Phase 1: fetch matches + independent data in parallel
+  const [legacyElos, matches, priceHistory, xgData] =
     await Promise.all([
       fetchLegacyElos(),
       fetchAll<MatchRow>(
@@ -469,7 +484,6 @@ export default async function V3Page() {
         undefined,
         "date"
       ),
-      fetchClosingOddsConsensus(),
       fetchAll<PriceHistoryRow>(
         "team_prices",
         "team, league, date, dollar_price, implied_elo",
@@ -478,6 +492,10 @@ export default async function V3Page() {
       ),
       fetchXgData(),
     ]);
+
+  // Phase 2: fetch odds by fixture IDs (needs matches first)
+  const fixtureIds = matches.map((m) => m.fixture_id);
+  const oddsConsensus = await fetchClosingOddsConsensus(fixtureIds);
 
   // Determine all teams from matches
   const teamLeagues = new Map<string, string>();

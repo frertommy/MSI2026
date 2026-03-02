@@ -50,28 +50,27 @@ async function fetchAllMatches(): Promise<Match[]> {
   return data ?? [];
 }
 
-// Fetch odds — only closest-to-kickoff snapshot (days_before_kickoff = 1) to keep it manageable
-async function fetchClosingOdds(): Promise<
-  Map<number, { homeProb: number; awayProb: number }>
-> {
-  // Accumulate all bookmaker probabilities per fixture, then compute true mean
+// Fetch odds by fixture batches — only closing odds (days_before_kickoff = 1)
+async function fetchClosingOdds(
+  fixtureIds: number[]
+): Promise<Map<number, { homeProb: number; awayProb: number }>> {
   const accum = new Map<number, { homeProbs: number[]; awayProbs: number[] }>();
 
-  // Paginate — table has ~28k rows
-  let from = 0;
-  const pageSize = 1000;
-  while (true) {
+  // Batch by 100 fixture IDs — much faster than scanning 2M+ row table
+  const BATCH = 100;
+  for (let i = 0; i < fixtureIds.length; i += BATCH) {
+    const batch = fixtureIds.slice(i, i + BATCH);
     const { data, error } = await supabase
       .from("odds_snapshots")
-      .select("fixture_id, home_odds, away_odds, days_before_kickoff")
-      .eq("days_before_kickoff", 1)
-      .range(from, from + pageSize - 1);
+      .select("fixture_id, home_odds, away_odds")
+      .in("fixture_id", batch)
+      .eq("days_before_kickoff", 1);
 
     if (error) {
-      console.error("odds fetch error:", error.message);
-      break;
+      console.error("odds batch error:", error.message);
+      continue;
     }
-    if (!data || data.length === 0) break;
+    if (!data) continue;
 
     for (const row of data) {
       if (!row.home_odds || !row.away_odds || row.home_odds <= 0 || row.away_odds <= 0) continue;
@@ -83,12 +82,8 @@ async function fetchClosingOdds(): Promise<
       entry.homeProbs.push(1 / row.home_odds);
       entry.awayProbs.push(1 / row.away_odds);
     }
-
-    if (data.length < pageSize) break;
-    from += pageSize;
   }
 
-  // Compute true mean across all bookmakers per fixture
   const map = new Map<number, { homeProb: number; awayProb: number }>();
   for (const [fid, { homeProbs, awayProbs }] of accum) {
     map.set(fid, {
@@ -201,11 +196,15 @@ function computeTeamRows(
 export const dynamic = "force-dynamic"; // skip build-time generation (odds table is 2M+ rows)
 
 export default async function Home() {
-  const [matches, oddsMap, priceMap] = await Promise.all([
+  // Phase 1: fetch matches + prices in parallel
+  const [matches, priceMap] = await Promise.all([
     fetchAllMatches(),
-    fetchClosingOdds(),
     fetchLatestPrices(),
   ]);
+
+  // Phase 2: fetch odds by fixture IDs (needs matches first)
+  const fixtureIds = matches.map((m) => m.fixture_id);
+  const oddsMap = await fetchClosingOdds(fixtureIds);
 
   const teams = computeTeamRows(matches, oddsMap, priceMap);
   const leagues = [...new Set(teams.map((t) => t.league))].sort();
