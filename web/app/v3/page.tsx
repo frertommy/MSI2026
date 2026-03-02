@@ -557,6 +557,12 @@ export default async function V3Page() {
             >
               V2 Pricing &rarr;
             </a>
+            <a
+              href="/measureme"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              MeasureMe &rarr;
+            </a>
             <span className="text-xs text-muted font-mono">
               {startingElosArr.length} teams &middot; {matches.length} matches
               &middot; {oddsConsensus.length} odds

@@ -245,6 +245,12 @@ export default async function Home() {
             >
               Simulation &rarr;
             </a>
+            <a
+              href="/measureme"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              MeasureMe &rarr;
+            </a>
             <span className="text-xs text-muted font-mono">
               {teams.length} teams &middot; {matches.length} matches &middot;{" "}
               {oddsMap.size} odds fixtures
