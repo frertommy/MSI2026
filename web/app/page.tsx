@@ -198,7 +198,7 @@ function computeTeamRows(
   return rows;
 }
 
-export const revalidate = 300; // revalidate every 5 min
+export const dynamic = "force-dynamic"; // skip build-time generation (odds table is 2M+ rows)
 
 export default async function Home() {
   const [matches, oddsMap, priceMap] = await Promise.all([

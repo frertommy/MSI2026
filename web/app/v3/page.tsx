@@ -457,7 +457,7 @@ function computeV2Prices(
 }
 
 // ─── Server component ──────────────────────────────────────
-export const revalidate = 300;
+export const dynamic = "force-dynamic"; // skip build-time generation (heavy V2 computation + large odds queries)
 
 export default async function V3Page() {
   const [legacyElos, matches, oddsConsensus, priceHistory, xgData] =
