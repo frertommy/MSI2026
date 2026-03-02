@@ -252,6 +252,12 @@ export default async function MatchesPage() {
             >
               V2 Pricing &rarr;
             </a>
+            <a
+              href="/v3"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Simulation &rarr;
+            </a>
             <span className="text-xs text-muted font-mono">
               {matches.length} fixtures
             </span>

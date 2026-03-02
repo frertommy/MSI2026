@@ -405,6 +405,12 @@ export default async function AnalyticsPage() {
             >
               V2 Pricing &rarr;
             </a>
+            <a
+              href="/v3"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Simulation &rarr;
+            </a>
             <span className="text-xs text-muted font-mono">
               {prices.length} prices &middot; {probs.length} predictions &middot;{" "}
               {matches.length} matches
