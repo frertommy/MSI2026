@@ -21,9 +21,27 @@ export interface OddsConsensus {
 
 export interface PriceHistoryRow {
   team: string;
+  league: string;
   date: string;
   dollar_price: number;
   implied_elo: number;
+}
+
+export interface V2Point {
+  date: string;
+  elo: number;
+  price: number;
+}
+
+interface XgRow {
+  fixture_id: number | null;
+  date: string;
+  home_team: string;
+  away_team: string;
+  home_xg: number;
+  away_xg: number;
+  home_goals: number;
+  away_goals: number;
 }
 
 // ─── Legacy name map (copied from pricing-engine.ts) ───────
@@ -150,7 +168,6 @@ async function fetchLegacyElos(): Promise<Record<string, number>> {
     const result: Record<string, number> = {};
     for (const [legacyName, entries] of Object.entries(data)) {
       if (!entries || entries.length === 0) continue;
-      // Last entry = most recent rating
       const last = entries[entries.length - 1];
       const apiName = LEGACY_NAME_MAP[legacyName] ?? legacyName;
       result[apiName] = last.rating;
@@ -207,26 +224,260 @@ async function fetchClosingOddsConsensus(): Promise<OddsConsensus[]> {
   return result;
 }
 
+// ─── Fetch xG data ─────────────────────────────────────────
+async function fetchXgData(): Promise<{
+  byFixtureId: Map<number, XgRow>;
+  byKey: Map<string, XgRow>;
+}> {
+  const rows = await fetchAll<XgRow>(
+    "match_xg",
+    "fixture_id, date, home_team, away_team, home_xg, away_xg, home_goals, away_goals"
+  );
+
+  const byFixtureId = new Map<number, XgRow>();
+  const byKey = new Map<string, XgRow>();
+
+  for (const r of rows) {
+    if (r.fixture_id) byFixtureId.set(r.fixture_id, r);
+    byKey.set(`${r.date}|${r.home_team}|${r.away_team}`, r);
+  }
+
+  return { byFixtureId, byKey };
+}
+
+// ─── V2 Engine Helpers ─────────────────────────────────────
+function parseScore(score: string): [number, number] | null {
+  const parts = score.split("-");
+  if (parts.length !== 2) return null;
+  const h = parseInt(parts[0].trim());
+  const a = parseInt(parts[1].trim());
+  if (isNaN(h) || isNaN(a)) return null;
+  return [h, a];
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── V2 Price Engine ───────────────────────────────────────
+const V2_K = 40;
+const V2_DECAY_RATE = 0.0015;
+const V2_MA_WINDOW = 45;
+const V2_XG_FLOOR = 0.4;
+const V2_XG_CEILING = 1.8;
+
+function computeV2Prices(
+  startingElosArr: { team: string; league: string; startingElo: number }[],
+  matches: MatchRow[],
+  oddsMap: Map<number, OddsConsensus>,
+  xgByFixtureId: Map<number, XgRow>,
+  xgByKey: Map<string, XgRow>
+): Record<string, V2Point[]> {
+  // State
+  const teamElo = new Map<string, number>();
+  const teamLeague = new Map<string, string>();
+  const teamSeries = new Map<string, V2Point[]>();
+  const teamEloHistory = new Map<string, number[]>(); // rolling buffer for MA
+  const teamLastMatch = new Map<string, string>();
+
+  for (const t of startingElosArr) {
+    teamElo.set(t.team, t.startingElo);
+    teamLeague.set(t.team, t.league);
+    teamSeries.set(t.team, []);
+    teamEloHistory.set(t.team, [t.startingElo]);
+  }
+
+  // Filter to played matches only, sorted by date
+  const playedMatches = matches
+    .filter((m) => parseScore(m.score) !== null)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (playedMatches.length === 0) {
+    const result: Record<string, V2Point[]> = {};
+    for (const [team, pts] of teamSeries) result[team] = pts;
+    return result;
+  }
+
+  const startDate = playedMatches[0].date;
+  const lastMatchDate = playedMatches[playedMatches.length - 1].date;
+
+  // Group matches by date
+  const matchesByDate = new Map<string, MatchRow[]>();
+  for (const m of playedMatches) {
+    if (!matchesByDate.has(m.date)) matchesByDate.set(m.date, []);
+    matchesByDate.get(m.date)!.push(m);
+  }
+
+  // Day-by-day loop
+  let currentDate = startDate;
+  while (currentDate <= lastMatchDate) {
+    const todaysMatches = matchesByDate.get(currentDate) ?? [];
+    const playingToday = new Set<string>();
+    for (const m of todaysMatches) {
+      playingToday.add(m.home_team);
+      playingToday.add(m.away_team);
+    }
+
+    // Compute league means for K-weighting
+    const leagueMeans = new Map<string, number>();
+    const leagueTeams = new Map<string, number[]>();
+    for (const [team, elo] of teamElo) {
+      const league = teamLeague.get(team) ?? "";
+      if (!leagueTeams.has(league)) leagueTeams.set(league, []);
+      leagueTeams.get(league)!.push(elo);
+    }
+    for (const [league, elos] of leagueTeams) {
+      leagueMeans.set(league, elos.reduce((a, b) => a + b, 0) / elos.length);
+    }
+
+    // 1. Carry decay for non-playing teams
+    for (const [team, elo] of teamElo) {
+      if (playingToday.has(team)) continue;
+
+      const lastMatch = teamLastMatch.get(team);
+      if (!lastMatch) continue; // no decay before first match
+
+      const daysSince = Math.round(
+        (new Date(currentDate).getTime() - new Date(lastMatch).getTime()) /
+          (1000 * 60 * 60 * 24)
+      );
+      if (daysSince <= 0) continue;
+
+      // 45-day MA anchor
+      const history = teamEloHistory.get(team) ?? [elo];
+      const maSlice = history.slice(-V2_MA_WINDOW);
+      const ma45 = maSlice.reduce((a, b) => a + b, 0) / maSlice.length;
+
+      const decayFactor = Math.max(0.5, 1 - V2_DECAY_RATE * daysSince);
+      const newElo = ma45 + (elo - ma45) * decayFactor;
+      teamElo.set(team, newElo);
+    }
+
+    // 2. Match shocks
+    for (const m of todaysMatches) {
+      const sc = parseScore(m.score);
+      if (!sc) continue;
+      const [hg, ag] = sc;
+
+      const homeElo = teamElo.get(m.home_team) ?? 1500;
+      const awayElo = teamElo.get(m.away_team) ?? 1500;
+      const leagueMean = leagueMeans.get(m.league) ?? 1500;
+
+      // Consensus odds
+      const odds = oddsMap.get(m.fixture_id);
+      let homeProb = 0.45;
+      let drawProb = 0.27;
+      let awayProb = 0.28;
+      if (odds) {
+        homeProb = odds.homeProb;
+        drawProb = odds.drawProb;
+        awayProb = odds.awayProb;
+      }
+
+      // Actual points (3-1-0)
+      const homeActual = hg > ag ? 3 : hg === ag ? 1 : 0;
+      const awayActual = ag > hg ? 3 : hg === ag ? 1 : 0;
+
+      // Expected points
+      const homeExpected = 3 * homeProb + 1 * drawProb;
+      const awayExpected = 3 * awayProb + 1 * drawProb;
+
+      // Opponent-strength-weighted K
+      const homeEffK = V2_K * (1 + (awayElo - leagueMean) / 400);
+      const awayEffK = V2_K * (1 + (homeElo - leagueMean) / 400);
+
+      // Raw shocks
+      let homeShock = homeEffK * (homeActual - homeExpected);
+      let awayShock = awayEffK * (awayActual - awayExpected);
+
+      // xG multiplier
+      const xg =
+        xgByFixtureId.get(m.fixture_id) ??
+        xgByKey.get(`${m.date}|${m.home_team}|${m.away_team}`);
+
+      if (xg) {
+        const homeGoalDiff = hg - ag;
+        const awayGoalDiff = ag - hg;
+
+        // Home xG multiplier
+        const homeXgDiff = xg.home_xg - xg.away_xg;
+        const homeSign = homeGoalDiff > 0 ? 1 : homeGoalDiff < 0 ? -1 : 0;
+        const homeMultRaw = 1.0 + 0.3 * homeXgDiff * homeSign;
+        const homeMult = Math.max(V2_XG_FLOOR, Math.min(V2_XG_CEILING, homeMultRaw));
+
+        // Away xG multiplier
+        const awayXgDiff = xg.away_xg - xg.home_xg;
+        const awaySign = awayGoalDiff > 0 ? 1 : awayGoalDiff < 0 ? -1 : 0;
+        const awayMultRaw = 1.0 + 0.3 * awayXgDiff * awaySign;
+        const awayMult = Math.max(V2_XG_FLOOR, Math.min(V2_XG_CEILING, awayMultRaw));
+
+        homeShock *= homeMult;
+        awayShock *= awayMult;
+      }
+
+      // Apply shocks directly
+      teamElo.set(m.home_team, homeElo + homeShock);
+      teamElo.set(m.away_team, awayElo + awayShock);
+
+      // Update last match date
+      teamLastMatch.set(m.home_team, currentDate);
+      teamLastMatch.set(m.away_team, currentDate);
+    }
+
+    // 3. Re-center all Elos to mean 1500
+    const allElos = [...teamElo.values()];
+    const globalMean = allElos.reduce((a, b) => a + b, 0) / allElos.length;
+    const shift = 1500 - globalMean;
+    for (const [team, elo] of teamElo) {
+      teamElo.set(team, elo + shift);
+    }
+
+    // 4. Record data points and update history
+    for (const [team, elo] of teamElo) {
+      const price = Math.max(10, (elo - 1000) / 5);
+      teamSeries.get(team)?.push({ date: currentDate, elo, price });
+
+      const history = teamEloHistory.get(team)!;
+      history.push(elo);
+      // Keep only last MA_WINDOW + some buffer
+      if (history.length > V2_MA_WINDOW + 30) {
+        history.splice(0, history.length - V2_MA_WINDOW - 10);
+      }
+    }
+
+    currentDate = addDays(currentDate, 1);
+  }
+
+  // Convert to plain object
+  const result: Record<string, V2Point[]> = {};
+  for (const [team, pts] of teamSeries) result[team] = pts;
+  return result;
+}
+
 // ─── Server component ──────────────────────────────────────
 export const revalidate = 300;
 
 export default async function V3Page() {
-  const [legacyElos, matches, oddsConsensus, priceHistory] = await Promise.all([
-    fetchLegacyElos(),
-    fetchAll<MatchRow>(
-      "matches",
-      "fixture_id, date, league, home_team, away_team, score, status",
-      undefined,
-      "date"
-    ),
-    fetchClosingOddsConsensus(),
-    fetchAll<PriceHistoryRow>(
-      "team_prices",
-      "team, date, dollar_price, implied_elo",
-      { model: "oracle" },
-      "date"
-    ),
-  ]);
+  const [legacyElos, matches, oddsConsensus, priceHistory, xgData] =
+    await Promise.all([
+      fetchLegacyElos(),
+      fetchAll<MatchRow>(
+        "matches",
+        "fixture_id, date, league, home_team, away_team, score, status",
+        undefined,
+        "date"
+      ),
+      fetchClosingOddsConsensus(),
+      fetchAll<PriceHistoryRow>(
+        "team_prices",
+        "team, league, date, dollar_price, implied_elo",
+        { model: "oracle" },
+        "date"
+      ),
+      fetchXgData(),
+    ]);
 
   // Determine all teams from matches
   const teamLeagues = new Map<string, string>();
@@ -242,10 +493,23 @@ export default async function V3Page() {
     startingElo: legacyElos[team] ?? 1500,
   }));
 
+  // Build odds map
+  const oddsMap = new Map<number, OddsConsensus>();
+  for (const o of oddsConsensus) oddsMap.set(o.fixture_id, o);
+
+  // Compute V2 prices server-side
+  const v2Series = computeV2Prices(
+    startingElosArr,
+    matches,
+    oddsMap,
+    xgData.byFixtureId,
+    xgData.byKey
+  );
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border px-6 py-4">
-        <div className="mx-auto max-w-[1600px] flex items-center gap-4">
+        <div className="mx-auto max-w-7xl flex items-center gap-4">
           <a
             href="/"
             className="text-muted hover:text-foreground transition-colors text-sm"
@@ -254,7 +518,7 @@ export default async function V3Page() {
           </a>
           <div className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />
           <h1 className="text-lg font-bold tracking-wider text-foreground uppercase">
-            Simulation
+            Price Comparison
           </h1>
           <div className="flex items-center gap-4 ml-auto">
             <a
@@ -276,18 +540,19 @@ export default async function V3Page() {
               V2 Pricing &rarr;
             </a>
             <span className="text-xs text-muted font-mono">
-              {startingElosArr.length} teams &middot; {matches.length} matches &middot;{" "}
-              {oddsConsensus.length} odds
+              {startingElosArr.length} teams &middot; {matches.length} matches
+              &middot; {oddsConsensus.length} odds
             </span>
           </div>
         </div>
       </header>
-      <V3Client
-        startingElos={startingElosArr}
-        matches={matches}
-        oddsConsensus={oddsConsensus}
-        priceHistory={priceHistory}
-      />
+      <main className="mx-auto max-w-7xl px-6 py-6">
+        <V3Client
+          startingElos={startingElosArr}
+          priceHistory={priceHistory}
+          v2Series={v2Series}
+        />
+      </main>
     </div>
   );
 }
