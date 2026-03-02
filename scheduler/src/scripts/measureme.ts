@@ -144,6 +144,7 @@ interface DailyRecord {
   isMatchDay: boolean;
   priceChange: number; // absolute pct change
   surprise: number; // |actual - expected| (only on match days)
+  isAtFloor: boolean; // true if price = $10 floor
 }
 
 interface ConfigResult {
@@ -152,14 +153,14 @@ interface ConfigResult {
   decay: number;
   surpriseR2: number;
   driftNeutrality: number;
-  matchVarShare: number;
+  floorPct: number;
   kurtosis: number;
   volUniformityRatio: number;
   meanRevSharpe: number;
   infoRatio: number;
   surpriseR2Score: number;
   driftScore: number;
-  matchShareScore: number;
+  floorScore: number;
   kurtosisScore: number;
   volUniScore: number;
   meanRevScore: number;
@@ -527,7 +528,8 @@ function simulateConfig(
         }
       }
 
-      series.push({ price, isMatchDay: isMatch, priceChange, surprise });
+      const isAtFloor = price <= 20; // "near-floor" zone — measures slope compression
+      series.push({ price, isMatchDay: isMatch, priceChange, surprise, isAtFloor });
 
       // Update elo history
       const hist = eloHistory.get(t)!;
@@ -596,22 +598,18 @@ function computeDriftNeutrality(
   return count > 0 ? totalReturn / count : 0;
 }
 
-function computeMatchVarShare(
+function computeFloorPct(
   teamSeries: Map<string, DailyRecord[]>
 ): number {
-  let matchSqSum = 0;
-  let allSqSum = 0;
+  let floorCount = 0;
+  let totalCount = 0;
   for (const series of teamSeries.values()) {
-    for (let i = 1; i < series.length; i++) {
-      if (series[i - 1].price <= 0) continue;
-      const ret =
-        (series[i].price - series[i - 1].price) / series[i - 1].price;
-      const sq = ret * ret;
-      allSqSum += sq;
-      if (series[i].isMatchDay) matchSqSum += sq;
+    for (const d of series) {
+      totalCount++;
+      if (d.isAtFloor) floorCount++;
     }
   }
-  return allSqSum > 0 ? matchSqSum / allSqSum : 0;
+  return totalCount > 0 ? (floorCount / totalCount) * 100 : 0;
 }
 
 function computeKurtosis(teamSeries: Map<string, DailyRecord[]>): number {
@@ -769,48 +767,54 @@ function computeInfoRatio(
     : 0;
 }
 
-// ─── Scoring functions (user's exact formulas) ──────────────
+// ─── Scoring functions (continuous — return FLOATS) ──────────
+// Each returns 0-100 float. Only rounded to int for display storage.
+// Composite is computed from floats for maximum granularity.
+
 function scoreR2(r2: number): number {
-  return Math.min(100, Math.round(r2 * 150));
+  // Quadratic scaling spreads the high-R² range where configs cluster.
+  // 1.0→100, 0.95→90, 0.9→81, 0.8→64, 0.6→36
+  const clamped = Math.max(0, Math.min(1, r2));
+  return clamped * clamped * 100;
 }
 
 function scoreDrift(meanDailyReturn: number): number {
-  return Math.max(0, Math.round(100 * (1 - Math.abs(meanDailyReturn) / 0.1)));
+  // Exponential decay — tighter threshold since recentering keeps drift tiny.
+  // |drift| = 0 → 100, 0.0001 → ~37, 0.001 → ~0
+  return Math.max(0, 100 * Math.exp(-Math.abs(meanDailyReturn) * 10000));
 }
 
-function scoreMatchShare(share: number): number {
-  const pct = share * 100;
-  if (pct >= 50 && pct <= 80) return 100;
-  if (pct >= 35 && pct <= 90) return 70;
-  if (pct >= 20 && pct <= 95) return 40;
-  return 10;
+function scoreFloor(floorPct: number): number {
+  // % of team-day observations at $10 floor. Slope-dependent!
+  // 0%→100, 2%→82, 5%→61, 10%→37, 20%→13, 30%→5
+  return Math.max(0, 100 * Math.exp(-floorPct * 0.1));
 }
 
 function scoreKurtosis(k: number): number {
-  if (k >= 4 && k <= 10) return 100;
-  if (k >= 3 && k <= 15) return 70;
-  if (k >= 2 && k <= 20) return 40;
-  return 10;
+  // Continuous distance from ideal=7.
+  // 7→100, 4/10→55, 2/12→37, 15→20
+  const ideal = 7;
+  const dist = Math.abs(k - ideal);
+  return Math.max(0, 100 * Math.exp(-dist * 0.2));
 }
 
 function scoreVolUni(ratio: number): number {
-  if (ratio < 1.5) return 100;
-  if (ratio < 2.0) return 85;
-  if (ratio < 2.5) return 65;
-  if (ratio < 3.0) return 40;
-  return 15;
+  // Continuous — ratio of 1.0 (perfect) → 100, decays from there.
+  // 1.0→100, 1.2→67, 1.5→37, 2.0→14
+  return Math.max(0, 100 * Math.exp(-(ratio - 1) * 2));
 }
 
 function scoreMeanRev(sharpe: number): number {
-  const abs = Math.abs(sharpe);
-  if (abs < 0.3) return 100;
-  if (abs < 0.5) return 70;
-  if (abs < 0.8) return 40;
-  return 15;
+  // Continuous — |SR|=0→100, exponential decay.
+  // 0→100, 0.1→74, 0.3→41, 0.5→22, 1.0→5
+  return Math.max(0, 100 * Math.exp(-Math.abs(sharpe) * 3));
 }
 
 function scoreInfo(corr: number): number {
-  return Math.min(100, Math.max(0, Math.round(corr * 110)));
+  // Quadratic scaling to spread out high-correlation values.
+  // 1.0→100, 0.95→90, 0.9→81, 0.8→64, 0.5→25
+  const clamped = Math.max(0, Math.min(1, corr));
+  return clamped * clamped * 100;
 }
 
 function computeAvgAnnualVol(
@@ -888,7 +892,7 @@ async function main() {
         // Compute indices
         const { r2, avgMatchMove } = computeSurpriseR2(teamDailySeries);
         const drift = computeDriftNeutrality(teamDailySeries);
-        const matchShare = computeMatchVarShare(teamDailySeries);
+        const floorPct = computeFloorPct(teamDailySeries);
         const kurt = computeKurtosis(teamDailySeries);
         const volRatio = computeVolUniformity(
           teamDailySeries,
@@ -902,25 +906,26 @@ async function main() {
         );
         const avgVol = computeAvgAnnualVol(teamDailySeries);
 
-        // Score each index
+        // Score each index (floats for composite precision)
         const s1 = scoreR2(r2);
         const s2 = scoreDrift(drift);
-        const s3 = scoreMatchShare(matchShare);
+        const s3 = scoreFloor(floorPct);
         const s4 = scoreKurtosis(kurt);
         const s5 = scoreVolUni(volRatio);
         const s6 = scoreMeanRev(mrSharpe);
         const s7 = scoreInfo(info);
 
-        // Composite
-        const composite = Math.round(
+        // Composite from float scores — 10x precision for tie-breaking
+        // Stored as integer (0-1000 scale). Display as /10 for 0.0-100.0.
+        const compositeRaw =
           s1 * 0.25 +
-            s2 * 0.15 +
-            s3 * 0.15 +
-            s4 * 0.1 +
-            s5 * 0.1 +
-            s6 * 0.15 +
-            s7 * 0.1
-        );
+          s2 * 0.15 +
+          s3 * 0.15 +
+          s4 * 0.1 +
+          s5 * 0.1 +
+          s6 * 0.15 +
+          s7 * 0.1;
+        const composite = Math.round(compositeRaw * 10);
 
         results.push({
           slope,
@@ -928,18 +933,18 @@ async function main() {
           decay,
           surpriseR2: r2,
           driftNeutrality: drift,
-          matchVarShare: matchShare,
+          floorPct,
           kurtosis: kurt,
           volUniformityRatio: volRatio,
           meanRevSharpe: mrSharpe,
           infoRatio: info,
-          surpriseR2Score: s1,
-          driftScore: s2,
-          matchShareScore: s3,
-          kurtosisScore: s4,
-          volUniScore: s5,
-          meanRevScore: s6,
-          infoScore: s7,
+          surpriseR2Score: Math.round(s1),
+          driftScore: Math.round(s2),
+          floorScore: Math.round(s3),
+          kurtosisScore: Math.round(s4),
+          volUniScore: Math.round(s5),
+          meanRevScore: Math.round(s6),
+          infoScore: Math.round(s7),
           composite,
           avgMatchMovePct: avgMatchMove,
           avgAnnualVol: avgVol,
@@ -967,7 +972,7 @@ async function main() {
     `BEST: slope=${best.slope} K=${best.k} decay=${best.decay} → composite=${best.composite}`
   );
   log.info(
-    `  R²=${round4(best.surpriseR2)}  drift=${best.driftScore}  match%=${round4(best.matchVarShare * 100)}  kurt=${round4(best.kurtosis)}  vol=${round4(best.volUniformityRatio)}×  MR=${round4(best.meanRevSharpe)}  info=${round4(best.infoRatio)}`
+    `  R²=${round4(best.surpriseR2)}  drift=${best.driftScore}  floor=${round4(best.floorPct)}%  kurt=${round4(best.kurtosis)}  vol=${round4(best.volUniformityRatio)}×  MR=${round4(best.meanRevSharpe)}  info=${round4(best.infoRatio)}`
   );
   log.info("");
 
@@ -981,14 +986,14 @@ async function main() {
     composite_score: r.composite,
     surprise_r2: round4(r.surpriseR2),
     drift_neutrality: round4(r.driftNeutrality),
-    match_variance_share: round4(r.matchVarShare),
+    match_variance_share: round4(r.floorPct),
     kurtosis: round4(r.kurtosis),
     vol_uniformity_ratio: round4(r.volUniformityRatio),
     mean_rev_sharpe: round4(r.meanRevSharpe),
     info_ratio: round4(r.infoRatio),
     surprise_r2_score: r.surpriseR2Score,
     drift_score: r.driftScore,
-    match_share_score: r.matchShareScore,
+    match_share_score: r.floorScore,
     kurtosis_score: r.kurtosisScore,
     vol_uni_score: r.volUniScore,
     mean_rev_score: r.meanRevScore,

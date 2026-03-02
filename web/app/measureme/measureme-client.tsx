@@ -26,12 +26,12 @@ const INDEX_DEFS = [
   {
     key: "match_share_score" as const,
     rawKey: "match_variance_share" as const,
-    name: "Match Var Share",
+    name: "Floor Hit %",
     weight: "15%",
     description:
-      "Fraction of total return variance that occurs on match days",
-    target: "50\u201380% ideal",
-    rawFmt: (v: number) => (v * 100).toFixed(1) + "%",
+      "% of team-day prices stuck at $10 floor (information loss from high slope)",
+    target: "0% ideal (lower is better)",
+    rawFmt: (v: number) => v.toFixed(1) + "%",
   },
   {
     key: "kurtosis_score" as const,
@@ -89,8 +89,21 @@ const REFERENCE_TEAMS = [
 
 const INITIAL_TABLE_ROWS = 50;
 
+// ─── Helpers ─────────────────────────────────────────────────
+// Composite is stored as 10x integer (e.g. 756 = 75.6)
+function fmtComposite(v: number): string {
+  return (v / 10).toFixed(1);
+}
+
 // ─── Score color helper ──────────────────────────────────────
 function scoreColor(score: number): string {
+  if (score >= 70) return "text-accent-green";
+  if (score >= 40) return "text-amber-400";
+  return "text-red-400";
+}
+
+function compositeColor(score10x: number): string {
+  const score = score10x / 10;
   if (score >= 70) return "text-accent-green";
   if (score >= 40) return "text-amber-400";
   return "text-red-400";
@@ -240,7 +253,7 @@ export function MeasureMeClient({ results, runId }: Props) {
 
           <div className="text-right">
             <div className="text-5xl font-bold text-accent-green font-mono">
-              {best.composite_score}
+              {fmtComposite(best.composite_score)}
             </div>
             <div className="text-xs text-muted font-mono mt-1">
               composite
@@ -392,9 +405,9 @@ export function MeasureMeClient({ results, runId }: Props) {
                       {row.decay}
                     </td>
                     <td
-                      className={`px-2 py-1.5 font-bold ${scoreColor(row.composite_score)}`}
+                      className={`px-2 py-1.5 font-bold ${compositeColor(row.composite_score)}`}
                     >
-                      {row.composite_score}
+                      {fmtComposite(row.composite_score)}
                     </td>
                     <td
                       className={`px-2 py-1.5 ${scoreColor(row.surprise_r2_score)}`}
