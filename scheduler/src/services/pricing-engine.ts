@@ -582,9 +582,18 @@ export async function runPricingEngine(options?: {
   const startingElos = buildStartingElos(allTeams, legacyElos);
   const homeAdv = calibrateHomeAdvantage(matches);
 
-  // Phase 2: Unified odds loading by fixture_id batches
-  const fixtureIds = [...new Set(matches.map((m) => m.fixture_id))];
-  const oddsIndex = await loadAllOddsSnapshots(fixtureIds);
+  // Phase 2: Unified odds loading — only recent fixtures need odds
+  // BT window is WINDOW_DAYS back + BT_FORWARD_DAYS forward; add MA_WINDOW buffer for drift
+  const allFixtureIds = [...new Set(matches.map((m) => m.fixture_id))];
+  const oddsWindowStart = addDays(END_DATE, -(WINDOW_DAYS + MA_WINDOW));
+  const oddsWindowEnd = addDays(END_DATE, BT_FORWARD_DAYS);
+  const recentFixtureIds = [...new Set(
+    matches
+      .filter((m) => m.date >= oddsWindowStart && m.date <= oddsWindowEnd)
+      .map((m) => m.fixture_id)
+  )];
+  log.info(`  Odds window: ${oddsWindowStart} → ${oddsWindowEnd} (${recentFixtureIds.length} of ${allFixtureIds.length} fixtures)`);
+  const oddsIndex = await loadAllOddsSnapshots(recentFixtureIds);
   log.info(`  ${matches.length} matches, ${oddsIndex.size} fixtures with odds, ${xgData.byFixtureId.size} xG entries`);
 
   // Date range
