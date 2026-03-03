@@ -98,10 +98,6 @@ export const XG_POLL_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
 export const XG_FLOOR = 0.4;                         // min shock multiplier (lucky win)
 export const XG_CEILING = 1.8;                       // max shock multiplier (dominant win)
 
-// ─── Odds drift signal constants ────────────────────────────
-export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
-export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
-export const DRIFT_FADE_DAYS = 7;      // Days-before-kickoff at which drift reaches full weight
-
 // ─── Odds blend constants (Phase 2) ─────────────────────────
+// Drift signal removed — replaced by direct odds-implied Elo blend
 export const PREMATCH_WEIGHT = 0.35;   // Blend weight: (1-w)*matchElo + w*oddsImplied

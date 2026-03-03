@@ -1,12 +1,12 @@
 /**
- * Pricing engine — optimized foundation.
+ * Pricing engine — Phase 2: Odds Blend.
  *
  * Key features:
  *   - Linear pricing: max(FLOOR, (elo-ZERO)/SLOPE)
  *   - 1/0.5/0 scoring (zero-sum), permanent shocks, flat K=20
  *   - Carry decay toward 45-day MA anchor
  *   - xG shock multiplier (Understat)
- *   - Odds drift signal (line movement)
+ *   - Odds blend: between-match price movement via odds-implied Elo
  *   - In-memory odds cache: full load once, incremental merges after
  *   - Incremental mode: replay only from last checkpoint date
  *   - No EMA smoothing (instant price discovery)
@@ -23,9 +23,6 @@ import {
   CARRY_DECAY_RATE,
   MA_WINDOW,
   LIVE_SHOCK_DISCOUNT,
-  DRIFT_SCALE,
-  DRIFT_MIN_HOURS,
-  DRIFT_FADE_DAYS,
   PREMATCH_WEIGHT,
   XG_ENABLED,
   XG_FLOOR,
@@ -513,67 +510,9 @@ function xgMultiplier(
   return Math.max(XG_FLOOR, Math.min(XG_CEILING, raw));
 }
 
-// ─── Odds drift signal ───────────────────────────────────────
-function computeDriftForDate(
-  date: string,
-  matches: Match[],
-  driftOdds: Map<number, DriftSnapshot[]>
-): Map<string, number> {
-  const driftMap = new Map<string, number>();
-  const cutoff = addDays(date, 14);
-
-  const upcoming = matches.filter((m) => m.date > date && m.date <= cutoff);
-
-  for (const match of upcoming) {
-    const snapshots = driftOdds.get(match.fixture_id);
-    if (!snapshots || snapshots.length < 2) continue;
-
-    const available = snapshots.filter(
-      (s) => s.snapshot_time.slice(0, 10) <= date
-    );
-    if (available.length < 2) continue;
-
-    const pinnacle = available.filter((s) => s.bookmaker === "pinnacle");
-    const selected = pinnacle.length >= 2 ? pinnacle : available;
-
-    selected.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
-
-    const earliest = selected[0];
-    const latest = selected[selected.length - 1];
-
-    const hoursDiff =
-      (new Date(latest.snapshot_time).getTime() -
-        new Date(earliest.snapshot_time).getTime()) /
-      3600000;
-    if (hoursDiff < DRIFT_MIN_HOURS) continue;
-
-    const dBefore = daysBetween(date, match.date);
-    const weight = Math.max(0, Math.min(1, (dBefore - 1) / DRIFT_FADE_DAYS));
-    if (weight <= 0) continue;
-
-    if (earliest.home_odds > 0 && latest.home_odds > 0) {
-      const earlyProb = 1 / earliest.home_odds;
-      const lateProb = 1 / latest.home_odds;
-      const homeDrift = DRIFT_SCALE * (lateProb - earlyProb) * weight;
-      driftMap.set(
-        match.home_team,
-        (driftMap.get(match.home_team) ?? 0) + homeDrift
-      );
-    }
-
-    if (earliest.away_odds > 0 && latest.away_odds > 0) {
-      const earlyProb = 1 / earliest.away_odds;
-      const lateProb = 1 / latest.away_odds;
-      const awayDrift = DRIFT_SCALE * (lateProb - earlyProb) * weight;
-      driftMap.set(
-        match.away_team,
-        (driftMap.get(match.away_team) ?? 0) + awayDrift
-      );
-    }
-  }
-
-  return driftMap;
-}
+// computeDriftForDate() removed in Phase 2, Commit 2.
+// Replaced by odds blend (oddsImpliedStrength + PREMATCH_WEIGHT blending).
+// Drift logic preserved in measureme.ts for baseline comparison.
 
 // ─── Match probabilities from Elo ────────────────────────────
 function matchProbsFromElo(
@@ -775,14 +714,10 @@ export async function runPricingEngine(options?: {
     // Only generate output rows for dates we want to write
     if (date < writeFromDate) continue;
 
-    // Odds drift signal for this date (kept for Commit 1 — removed in Commit 2)
-    const driftMap = computeDriftForDate(date, matches, oddsIndex);
-
     // 5. Generate prices — single oracle model with odds blend
     for (const team of allTeams) {
       const league = teamLeague.get(team)!;
       const elo = teamElo.get(team) ?? INITIAL_ELO;
-      const drift = driftMap.get(team) ?? 0;
 
       // Odds blend: find next match, compute odds-implied strength
       let finalElo = elo;
@@ -813,16 +748,15 @@ export async function runPricingEngine(options?: {
         }
       }
 
-      // Blend overrides drift when active; drift is fallback for IDLE
-      const eloWithDrift = elo + drift;
-      const eloForPricing = blendActive ? finalElo : eloWithDrift;
+      // Drift removed — pure matchElo when no blend active
+      const eloForPricing = blendActive ? finalElo : elo;
       const rawPrice = Math.max(PRICE_FLOOR, (eloForPricing - PRICE_ZERO) / PRICE_SLOPE);
       const roundedPrice = Math.round(rawPrice * 100) / 100;
 
-      // drift_elo: store oddsImpliedStrength when blend active, else drift
+      // drift_elo column: oddsImpliedStrength when blend active, 0 otherwise
       const driftEloValue = oddsImplied !== null
         ? Math.round(oddsImplied * 10) / 10
-        : Math.round(drift * 10) / 10;
+        : 0;
 
       teamPriceRows.push({
         team,
@@ -849,8 +783,8 @@ export async function runPricingEngine(options?: {
       const homeEloRaw = teamElo.get(m.home_team) ?? INITIAL_ELO;
       const awayEloRaw = teamElo.get(m.away_team) ?? INITIAL_ELO;
 
-      let homeElo = homeEloRaw + (driftMap.get(m.home_team) ?? 0);
-      let awayElo = awayEloRaw + (driftMap.get(m.away_team) ?? 0);
+      let homeElo = homeEloRaw;
+      let awayElo = awayEloRaw;
 
       // Apply blend to home team
       const homeNext = findNextMatch(m.home_team, date, matches, 14);
