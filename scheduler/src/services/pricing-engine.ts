@@ -12,7 +12,7 @@
  *   - Live partial shocks: 0.5x discount for in-progress matches
  *   - Single "oracle" model, START_DATE = 2025-08-01
  */
-import { getSupabase, upsertBatched } from "../api/supabase-client.js";
+import { getSupabase, upsertBatched, fetchAllRows } from "../api/supabase-client.js";
 import { log } from "../logger.js";
 import {
   INITIAL_ELO,
@@ -171,13 +171,49 @@ function parseScore(score: string): [number, number] | null {
 
 // ─── Data Loading ────────────────────────────────────────────
 async function loadMatches(): Promise<Match[]> {
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from("matches")
-    .select("fixture_id, date, league, home_team, away_team, score, status")
-    .order("date", { ascending: true });
-  if (error) throw new Error(`matches: ${error.message}`);
-  return (data ?? []) as Match[];
+  // Use paginated fetch — Supabase default limit is 1000 rows,
+  // but we have 1400+ matches and need ALL of them.
+  const rows = await fetchAllRows<Record<string, unknown>>(
+    "matches",
+    "fixture_id, date, league, home_team, away_team, score, status",
+    undefined,
+    { column: "date", ascending: true }
+  );
+
+  // Deduplicate: same date+home+away can have multiple fixture_ids.
+  // Prefer rows with real scores over "N/A".
+  const byKey = new Map<string, Match>();
+  for (const r of rows) {
+    const m: Match = {
+      fixture_id: r.fixture_id as number,
+      date: r.date as string,
+      league: r.league as string,
+      home_team: r.home_team as string,
+      away_team: r.away_team as string,
+      score: r.score as string,
+      status: r.status as string,
+    };
+    const key = `${m.date}|${m.home_team}|${m.away_team}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, m);
+    } else if (
+      m.status === "finished" && existing.status !== "finished"
+    ) {
+      byKey.set(key, m);
+    } else if (
+      m.score && m.score !== "N/A" &&
+      (!existing.score || existing.score === "N/A")
+    ) {
+      byKey.set(key, m);
+    }
+  }
+
+  const matches = [...byKey.values()].sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+  log.info(`  Loaded ${rows.length} match rows → ${matches.length} deduplicated matches`);
+  return matches;
 }
 
 /**
