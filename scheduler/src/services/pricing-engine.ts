@@ -189,29 +189,43 @@ async function loadAllOddsSnapshots(
 ): Promise<Map<number, DriftSnapshot[]>> {
   const sb = getSupabase();
   const result = new Map<number, DriftSnapshot[]>();
-  const BATCH = 100;
+  const BATCH = 30; // small batches to avoid statement timeout on 2M+ row table
+  const PAGE = 1000;
 
   for (let i = 0; i < fixtureIds.length; i += BATCH) {
     const batch = fixtureIds.slice(i, i + BATCH);
-    const { data, error } = await sb
-      .from("odds_snapshots")
-      .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
-      .in("fixture_id", batch)
-      .order("snapshot_time", { ascending: true });
 
-    if (error) {
-      log.error(`odds batch ${Math.floor(i / BATCH) + 1} error:`, error.message);
-      continue;
-    }
-    if (!data) continue;
+    // Paginate within each batch (fixtures can have hundreds of snapshots)
+    let from = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from("odds_snapshots")
+        .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
+        .in("fixture_id", batch)
+        .range(from, from + PAGE - 1);
 
-    for (const row of data as DriftSnapshot[]) {
-      if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
-      if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
-      const fid = row.fixture_id;
-      if (!result.has(fid)) result.set(fid, []);
-      result.get(fid)!.push(row);
+      if (error) {
+        log.error(`odds batch ${Math.floor(i / BATCH) + 1} error (offset ${from}):`, error.message);
+        break;
+      }
+      if (!data || data.length === 0) break;
+
+      for (const row of data as DriftSnapshot[]) {
+        if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+        if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
+        const fid = row.fixture_id;
+        if (!result.has(fid)) result.set(fid, []);
+        result.get(fid)!.push(row);
+      }
+
+      if (data.length < PAGE) break;
+      from += PAGE;
     }
+  }
+
+  // Sort each fixture's snapshots by time in memory
+  for (const snaps of result.values()) {
+    snaps.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
   }
 
   log.info(`  Loaded odds for ${result.size} fixtures (${[...result.values()].reduce((a, b) => a + b.length, 0)} snapshots)`);
