@@ -162,8 +162,10 @@ export class Scheduler {
         }
       }
 
-      // 4. Run pricing engine
-      const pricingResult = await runPricingEngine();
+      // 4. Run pricing engine (incremental after first cycle)
+      const pricingResult = await runPricingEngine({
+        incremental: this.cycleCount > 1,
+      });
       log.info(
         `Pricing: ${pricingResult.teamPriceRows} team_prices, ${pricingResult.matchProbRows} match_probs`
       );

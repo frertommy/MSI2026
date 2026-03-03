@@ -43,7 +43,7 @@ async function createFixtureFromEvent(
   const date = event.commence_time.slice(0, 10);
   const fixtureId = syntheticFixtureId(event.id);
 
-  const row = {
+  const row: Record<string, unknown> = {
     fixture_id: fixtureId,
     date,
     league,
@@ -51,6 +51,7 @@ async function createFixtureFromEvent(
     away_team: resolvedAway,
     score: "N/A",
     status: "upcoming",
+    commence_time: event.commence_time,
   };
 
   const sb = getSupabase();

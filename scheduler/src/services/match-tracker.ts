@@ -90,6 +90,7 @@ export async function refreshMatches(): Promise<{
           score,
           status: finished ? "finished" : live ? "live" : "upcoming",
           status_code: statusCode,
+          commence_time: f.fixture.date, // Full ISO datetime for sub-day resolution
         });
       }
     } catch (err) {

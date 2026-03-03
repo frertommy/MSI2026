@@ -1,37 +1,31 @@
 /**
- * Pricing engine — MeasureMe-validated, Step 1b.
+ * Pricing engine — optimized foundation.
  *
  * Key features:
- *   - Linear pricing: max(FLOOR, (elo-ZERO)/SLOPE) instead of logistic
- *   - 1/0.5/0 scoring (zero-sum) instead of 3/1/0
- *   - Permanent shocks (no exponential decay)
- *   - Carry decay toward 45-day MA anchor (not fixed league mean)
- *   - Forward-looking BT: past results + upcoming odds (14-day window)
- *   - Hours-based freshness: exp(-hoursAgo / 72) for odds staleness
- *   - Unified odds: loadAllOddsSnapshots() + getBestOddsAsOf()
- *   - Live partial shocks: 0.5x discount for in-progress matches
- *   - Single "oracle" model, START_DATE = 2025-08-01
+ *   - Linear pricing: max(FLOOR, (elo-ZERO)/SLOPE)
+ *   - 1/0.5/0 scoring (zero-sum), permanent shocks, flat K=20
+ *   - Carry decay toward 45-day MA anchor
+ *   - xG shock multiplier (Understat)
+ *   - Odds drift signal (line movement)
+ *   - In-memory odds cache: full load once, incremental merges after
+ *   - Incremental mode: replay only from last checkpoint date
+ *   - No EMA smoothing (instant price discovery)
+ *   - No confidence metric (always 1)
  */
 import { getSupabase, upsertBatched, fetchAllRows } from "../api/supabase-client.js";
 import { log } from "../logger.js";
 import {
   INITIAL_ELO,
-  BT_ITERATIONS,
-  WINDOW_DAYS,
-  DECAY_HALF_LIFE,
   SHOCK_K,
   PRICE_SLOPE,
   PRICE_ZERO,
   PRICE_FLOOR,
   CARRY_DECAY_RATE,
   MA_WINDOW,
-  BT_FORWARD_DAYS,
-  FRESHNESS_HALFLIFE_HOURS,
   LIVE_SHOCK_DISCOUNT,
   DRIFT_SCALE,
   DRIFT_MIN_HOURS,
   DRIFT_FADE_DAYS,
-  EMA_ALPHA,
   XG_ENABLED,
   XG_FLOOR,
   XG_CEILING,
@@ -128,6 +122,176 @@ const LEGACY_NAME_MAP: Record<string, string> = {
 const LEGACY_URL =
   "https://raw.githubusercontent.com/frertommy/MSI/main/data/msi_daily.json";
 
+// ─── In-memory odds cache ──────────────────────────────────
+// Persists across pricing cycles in the long-lived scheduler process.
+// Full load on first call, incremental merges after.
+let oddsCache: Map<number, DriftSnapshot[]> | null = null;
+let oddsCacheLastTime: string | null = null; // ISO timestamp of latest snapshot in cache
+
+/**
+ * Load ALL odds into memory on first call.
+ * On subsequent calls, only fetch snapshots newer than the last load.
+ * Merges new snapshots into the existing cache.
+ */
+async function loadOddsWithCache(
+  fixtureIds: number[]
+): Promise<Map<number, DriftSnapshot[]>> {
+  const sb = getSupabase();
+  const BATCH = 30;
+  const PAGE = 1000;
+
+  if (oddsCache === null) {
+    // First call: full load (same as before but builds cache)
+    log.info("  Odds cache: full initial load...");
+    oddsCache = new Map();
+    oddsCacheLastTime = null;
+
+    for (let i = 0; i < fixtureIds.length; i += BATCH) {
+      const batch = fixtureIds.slice(i, i + BATCH);
+      let from = 0;
+      while (true) {
+        const { data, error } = await sb
+          .from("odds_snapshots")
+          .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
+          .in("fixture_id", batch)
+          .range(from, from + PAGE - 1);
+
+        if (error) {
+          log.error(`odds batch error (offset ${from}):`, error.message);
+          break;
+        }
+        if (!data || data.length === 0) break;
+
+        for (const row of data as DriftSnapshot[]) {
+          if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+          if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
+          const fid = row.fixture_id;
+          if (!oddsCache.has(fid)) oddsCache.set(fid, []);
+          oddsCache.get(fid)!.push(row);
+          if (!oddsCacheLastTime || row.snapshot_time > oddsCacheLastTime) {
+            oddsCacheLastTime = row.snapshot_time;
+          }
+        }
+
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+    }
+
+    // Sort each fixture's snapshots by time
+    for (const snaps of oddsCache.values()) {
+      snaps.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
+    }
+
+    const totalSnaps = [...oddsCache.values()].reduce((a, b) => a + b.length, 0);
+    log.info(`  Odds cache: loaded ${oddsCache.size} fixtures (${totalSnaps} snapshots)`);
+  } else {
+    // Subsequent call: incremental merge
+    const sinceTime = oddsCacheLastTime ?? "2000-01-01T00:00:00Z";
+    log.info(`  Odds cache: incremental fetch since ${sinceTime}...`);
+    let newSnapshots = 0;
+    let newFixtures = 0;
+
+    // Also check for any new fixture IDs not in cache yet
+    const uncachedIds = fixtureIds.filter((id) => !oddsCache!.has(id));
+    const idsToFetch = uncachedIds.length > 0 ? uncachedIds : [];
+
+    // Fetch new snapshots by time (for all fixtures)
+    let from = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from("odds_snapshots")
+        .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
+        .gt("snapshot_time", sinceTime)
+        .range(from, from + PAGE - 1);
+
+      if (error) {
+        log.error("odds incremental fetch error:", error.message);
+        break;
+      }
+      if (!data || data.length === 0) break;
+
+      for (const row of data as DriftSnapshot[]) {
+        if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+        if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
+        const fid = row.fixture_id;
+        if (!oddsCache!.has(fid)) {
+          oddsCache!.set(fid, []);
+          newFixtures++;
+        }
+        oddsCache!.get(fid)!.push(row);
+        newSnapshots++;
+        if (!oddsCacheLastTime || row.snapshot_time > oddsCacheLastTime) {
+          oddsCacheLastTime = row.snapshot_time;
+        }
+      }
+
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+
+    // Fetch odds for entirely new fixture IDs
+    if (idsToFetch.length > 0) {
+      for (let i = 0; i < idsToFetch.length; i += BATCH) {
+        const batch = idsToFetch.slice(i, i + BATCH);
+        let bFrom = 0;
+        while (true) {
+          const { data, error } = await sb
+            .from("odds_snapshots")
+            .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
+            .in("fixture_id", batch)
+            .range(bFrom, bFrom + PAGE - 1);
+
+          if (error) break;
+          if (!data || data.length === 0) break;
+
+          for (const row of data as DriftSnapshot[]) {
+            if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+            if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
+            const fid = row.fixture_id;
+            if (!oddsCache!.has(fid)) {
+              oddsCache!.set(fid, []);
+              newFixtures++;
+            }
+            oddsCache!.get(fid)!.push(row);
+            newSnapshots++;
+            if (!oddsCacheLastTime || row.snapshot_time > oddsCacheLastTime) {
+              oddsCacheLastTime = row.snapshot_time;
+            }
+          }
+
+          if (data.length < PAGE) break;
+          bFrom += PAGE;
+        }
+      }
+    }
+
+    // Re-sort only fixtures that got new data
+    if (newSnapshots > 0) {
+      for (const snaps of oddsCache!.values()) {
+        // Only re-sort if unsorted (check last two elements)
+        if (snaps.length >= 2) {
+          const last = snaps[snaps.length - 1];
+          const prev = snaps[snaps.length - 2];
+          if (last.snapshot_time < prev.snapshot_time) {
+            snaps.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
+          }
+        }
+      }
+    }
+
+    log.info(`  Odds cache: +${newSnapshots} snapshots, +${newFixtures} new fixtures`);
+  }
+
+  return oddsCache;
+}
+
+/** Reset the odds cache (for testing or forced full reload). */
+export function resetOddsCache(): void {
+  oddsCache = null;
+  oddsCacheLastTime = null;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────
 function daysBetween(a: string, b: string): number {
   return (new Date(b).getTime() - new Date(a).getTime()) / 86400000;
@@ -216,64 +380,14 @@ async function loadMatches(): Promise<Match[]> {
   return matches;
 }
 
-/**
- * Unified odds loader — batch-fetch ALL snapshots for given fixtures.
- * Returns Map<fixture_id, DriftSnapshot[]> sorted by snapshot_time ASC.
- * Replaces both loadFreshestOdds() and loadDriftOdds().
- */
-async function loadAllOddsSnapshots(
-  fixtureIds: number[]
-): Promise<Map<number, DriftSnapshot[]>> {
-  const sb = getSupabase();
-  const result = new Map<number, DriftSnapshot[]>();
-  const BATCH = 30; // small batches to avoid statement timeout on 2M+ row table
-  const PAGE = 1000;
-
-  for (let i = 0; i < fixtureIds.length; i += BATCH) {
-    const batch = fixtureIds.slice(i, i + BATCH);
-
-    // Paginate within each batch (fixtures can have hundreds of snapshots)
-    let from = 0;
-    while (true) {
-      const { data, error } = await sb
-        .from("odds_snapshots")
-        .select("fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time")
-        .in("fixture_id", batch)
-        .range(from, from + PAGE - 1);
-
-      if (error) {
-        log.error(`odds batch ${Math.floor(i / BATCH) + 1} error (offset ${from}):`, error.message);
-        break;
-      }
-      if (!data || data.length === 0) break;
-
-      for (const row of data as DriftSnapshot[]) {
-        if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
-        if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1) continue;
-        const fid = row.fixture_id;
-        if (!result.has(fid)) result.set(fid, []);
-        result.get(fid)!.push(row);
-      }
-
-      if (data.length < PAGE) break;
-      from += PAGE;
-    }
-  }
-
-  // Sort each fixture's snapshots by time in memory
-  for (const snaps of result.values()) {
-    snaps.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
-  }
-
-  log.info(`  Loaded odds for ${result.size} fixtures (${[...result.values()].reduce((a, b) => a + b.length, 0)} snapshots)`);
-  return result;
-}
+// Freshness half-life for odds staleness (used by getBestOddsAsOf)
+const ODDS_FRESHNESS_HALFLIFE_HOURS = 72;
 
 /**
  * Point-in-time odds query: find the best odds available as of a given datetime.
  * - Finds latest snapshot per bookmaker where snapshot_time <= asOfISO
  * - Prefers Pinnacle; falls back to median across bookmakers
- * - Computes freshness: exp(-hoursAgo / FRESHNESS_HALFLIFE_HOURS)
+ * - Computes freshness: exp(-hoursAgo / half-life)
  */
 function getBestOddsAsOf(
   fixtureId: number,
@@ -325,7 +439,7 @@ function getBestOddsAsOf(
 
   // Freshness: exp(-hoursAgo / half-life)
   const hoursAgo = (asOfTime - latestTime) / 3600000;
-  const freshness = Math.exp(-hoursAgo / FRESHNESS_HALFLIFE_HOURS);
+  const freshness = Math.exp(-hoursAgo / ODDS_FRESHNESS_HALFLIFE_HOURS);
 
   return { homeProb, drawProb, awayProb, freshness };
 }
@@ -346,9 +460,6 @@ async function fetchLegacyElos(): Promise<Map<string, number>> {
     const seasonStart = "2025-08-01";
     for (const [legacyName, entries] of Object.entries(data)) {
       if (!entries || entries.length === 0) continue;
-      // Use the rating closest to but BEFORE the replay start date.
-      // Taking the latest entry (Feb 2026) would double-count every match
-      // since the oracle replays from Aug 2025 onward.
       const preSeason = entries.filter((e) => e.date < seasonStart);
       const startRating = preSeason.length > 0
         ? preSeason[preSeason.length - 1].rating
@@ -380,7 +491,7 @@ function buildStartingElos(
 }
 
 // ─── Home advantage ──────────────────────────────────────────
-function calibrateHomeAdvantage(matches: Match[]): number {
+export function calibrateHomeAdvantage(matches: Match[]): number {
   let homeWins = 0;
   let total = 0;
   for (const m of matches) {
@@ -392,114 +503,6 @@ function calibrateHomeAdvantage(matches: Match[]): number {
   const homeWinRate = total > 0 ? homeWins / total : 0.46;
   const prob = Math.max(0.001, Math.min(0.999, homeWinRate));
   return -400 * Math.log10(1 / prob - 1);
-}
-
-// ─── Bradley-Terry (forward-looking: past results + future odds) ──
-function bradleyTerry(
-  matches: Match[],
-  targetDate: string,
-  homeAdv: number,
-  allTeams: Set<string>,
-  startingElos: Map<string, number>,
-  oddsIndex: Map<number, DriftSnapshot[]>
-): Map<string, number> {
-  const windowStart = addDays(targetDate, -WINDOW_DAYS);
-  const windowEnd = addDays(targetDate, BT_FORWARD_DAYS);
-  const endOfDay = `${targetDate}T23:59:59Z`;
-
-  // Past matches with valid scores
-  const pastMatches = matches.filter(
-    (m) =>
-      m.date >= windowStart &&
-      m.date <= targetDate &&
-      parseScore(m.score) !== null
-  );
-
-  // Future matches (no score yet, within forward window)
-  const futureMatches = matches.filter(
-    (m) =>
-      m.date > targetDate &&
-      m.date <= windowEnd &&
-      parseScore(m.score) === null
-  );
-
-  // Pre-fetch odds for future matches
-  const futureOdds = new Map<number, { homeProb: number; drawProb: number; awayProb: number; freshness: number }>();
-  for (const m of futureMatches) {
-    const odds = getBestOddsAsOf(m.fixture_id, endOfDay, oddsIndex);
-    if (odds && odds.freshness > 0.05) futureOdds.set(m.fixture_id, odds);
-  }
-
-  const validFuture = futureMatches.filter((m) => futureOdds.has(m.fixture_id));
-
-  const ratings = new Map<string, number>();
-  for (const t of allTeams)
-    ratings.set(t, startingElos.get(t) ?? INITIAL_ELO);
-
-  if (pastMatches.length === 0 && validFuture.length === 0) return ratings;
-
-  // Build observations: { match, obsHome, weight }
-  const observations: { match: Match; obsHome: number; weight: number }[] = [];
-
-  // Past: obsHome = actual result, freshness = 1.0
-  for (const m of pastMatches) {
-    const sc = parseScore(m.score)!;
-    const obsHome = sc[0] > sc[1] ? 1.0 : sc[0] === sc[1] ? 0.5 : 0.0;
-    const age = daysBetween(m.date, targetDate);
-    const recency = Math.pow(0.5, age / DECAY_HALF_LIFE);
-    observations.push({ match: m, obsHome, weight: recency });
-  }
-
-  // Future: obsHome = odds-implied probability, weight = recency * freshness
-  for (const m of validFuture) {
-    const odds = futureOdds.get(m.fixture_id)!;
-    const daysAhead = daysBetween(targetDate, m.date);
-    const recency = Math.pow(0.5, daysAhead / (2 * DECAY_HALF_LIFE));
-    const weight = recency * odds.freshness;
-    observations.push({ match: m, obsHome: odds.homeProb, weight });
-  }
-
-  for (let iter = 0; iter < BT_ITERATIONS; iter++) {
-    const numSum = new Map<string, number>();
-    const denSum = new Map<string, number>();
-    for (const t of allTeams) {
-      numSum.set(t, 0);
-      denSum.set(t, 0);
-    }
-
-    for (const obs of observations) {
-      const m = obs.match;
-      const w = obs.weight;
-
-      const rHome = ratings.get(m.home_team) ?? INITIAL_ELO;
-      const rAway = ratings.get(m.away_team) ?? INITIAL_ELO;
-      const expHome = eloExpectedScore(rHome + homeAdv, rAway);
-
-      numSum.set(m.home_team, numSum.get(m.home_team)! + w * obs.obsHome);
-      denSum.set(m.home_team, denSum.get(m.home_team)! + w * expHome);
-      numSum.set(m.away_team, numSum.get(m.away_team)! + w * (1 - obs.obsHome));
-      denSum.set(m.away_team, denSum.get(m.away_team)! + w * (1 - expHome));
-    }
-
-    for (const t of allTeams) {
-      const num = numSum.get(t) ?? 0;
-      const den = denSum.get(t) ?? 0;
-      if (den > 0.001) {
-        const factor = num / den;
-        const oldR = ratings.get(t) ?? INITIAL_ELO;
-        ratings.set(t, oldR + 40 * Math.log(factor));
-      }
-    }
-
-    // Re-center to mean 1500
-    const avg =
-      [...ratings.values()].reduce((a, b) => a + b, 0) / ratings.size;
-    for (const [t, r] of ratings) {
-      ratings.set(t, r - avg + INITIAL_ELO);
-    }
-  }
-
-  return ratings;
 }
 
 // ─── xG multiplier ──────────────────────────────────────────
@@ -548,8 +551,8 @@ function computeDriftForDate(
       3600000;
     if (hoursDiff < DRIFT_MIN_HOURS) continue;
 
-    const daysBefore = daysBetween(date, match.date);
-    const weight = Math.max(0, Math.min(1, (daysBefore - 1) / DRIFT_FADE_DAYS));
+    const dBefore = daysBetween(date, match.date);
+    const weight = Math.max(0, Math.min(1, (dBefore - 1) / DRIFT_FADE_DAYS));
     if (weight <= 0) continue;
 
     if (earliest.home_odds > 0 && latest.home_odds > 0) {
@@ -600,11 +603,13 @@ function matchProbsFromElo(
 // ─── Main Engine ─────────────────────────────────────────────
 export async function runPricingEngine(options?: {
   endDate?: string;
+  incremental?: boolean;
 }): Promise<PricingResult> {
   const END_DATE = options?.endDate ?? new Date().toISOString().slice(0, 10);
   const START_DATE = "2025-08-01";
+  const incremental = options?.incremental ?? false;
 
-  log.info(`Pricing engine: ${START_DATE} → ${END_DATE}`);
+  log.info(`Pricing engine: ${START_DATE} → ${END_DATE}${incremental ? " (incremental)" : ""}`);
 
   // Phase 1: Load data
   const [matches, legacyElos, xgData] = await Promise.all([
@@ -626,15 +631,18 @@ export async function runPricingEngine(options?: {
   const startingElos = buildStartingElos(allTeams, legacyElos);
   const homeAdv = calibrateHomeAdvantage(matches);
 
-  // Phase 2: Unified odds loading — all fixtures (DB indexes make this safe)
+  // Phase 2: Odds loading (cached — first call is full load, subsequent are incremental)
   const allFixtureIds = [...new Set(matches.map((m) => m.fixture_id))];
-  log.info(`  Loading odds for all ${allFixtureIds.length} fixtures`);
-  const oddsIndex = await loadAllOddsSnapshots(allFixtureIds);
+  log.info(`  Loading odds for ${allFixtureIds.length} fixtures`);
+  const oddsIndex = await loadOddsWithCache(allFixtureIds);
   log.info(`  ${matches.length} matches, ${oddsIndex.size} fixtures with odds, ${xgData.byFixtureId.size} xG entries`);
 
   // Date range
   const dates = allDates(START_DATE, END_DATE);
   log.info(`  Running oracle model for ${dates.length} days...`);
+
+  // Determine which dates to write (full replay = all, incremental = last 2 days)
+  const writeFromDate = incremental ? addDays(END_DATE, -1) : START_DATE;
 
   // State for day-by-day loop
   const teamElo = new Map<string, number>();
@@ -648,7 +656,6 @@ export async function runPricingEngine(options?: {
 
   const teamPriceRows: TeamPrice[] = [];
   const matchProbRows: MatchProb[] = [];
-  const prevEma = new Map<string, number>();
 
   const matchesByDate = new Map<string, Match[]>();
   for (const m of matches) {
@@ -768,18 +775,11 @@ export async function runPricingEngine(options?: {
       }
     }
 
+    // Only generate output rows for dates we want to write
+    if (date < writeFromDate) continue;
+
     // Odds drift signal for this date
     const driftMap = computeDriftForDate(date, matches, oddsIndex);
-
-    // Matches in window for confidence
-    const windowStart = addDays(date, -WINDOW_DAYS);
-    const matchesInWindow = new Map<string, number>();
-    for (const m of matches) {
-      if (m.date >= windowStart && m.date <= date) {
-        matchesInWindow.set(m.home_team, (matchesInWindow.get(m.home_team) ?? 0) + 1);
-        matchesInWindow.set(m.away_team, (matchesInWindow.get(m.away_team) ?? 0) + 1);
-      }
-    }
 
     // 5. Generate prices — single oracle model
     for (const team of allTeams) {
@@ -787,19 +787,10 @@ export async function runPricingEngine(options?: {
       const elo = teamElo.get(team) ?? INITIAL_ELO;
       const drift = driftMap.get(team) ?? 0;
       const driftRounded = Math.round(drift * 10) / 10;
-      const mInW = matchesInWindow.get(team) ?? 0;
 
       const eloWithDrift = elo + drift;
       const rawPrice = Math.max(PRICE_FLOOR, (eloWithDrift - PRICE_ZERO) / PRICE_SLOPE);
       const roundedPrice = Math.round(rawPrice * 100) / 100;
-
-      // EMA smoothing
-      const emaKey = `${team}|oracle`;
-      const prevEmaVal = prevEma.get(emaKey);
-      const emaPrice = prevEmaVal !== undefined
-        ? Math.round((EMA_ALPHA * roundedPrice + (1 - EMA_ALPHA) * prevEmaVal) * 100) / 100
-        : roundedPrice;
-      prevEma.set(emaKey, emaPrice);
 
       teamPriceRows.push({
         team,
@@ -808,9 +799,9 @@ export async function runPricingEngine(options?: {
         model: "oracle",
         implied_elo: Math.round(eloWithDrift * 10) / 10,
         dollar_price: roundedPrice,
-        ema_dollar_price: emaPrice,
-        confidence: Math.min(1, mInW / 10),
-        matches_in_window: mInW,
+        ema_dollar_price: roundedPrice, // No EMA — instant price discovery
+        confidence: 1, // Always 1 — column kept for backward compat
+        matches_in_window: 0, // Deprecated — kept for backward compat
         drift_elo: driftRounded,
       });
     }
@@ -865,8 +856,8 @@ export async function runPricingEngine(options?: {
 
   // Top 10 oracle prices
   const latestDate = dates[dates.length - 1];
-  const topTeams = teamPriceRows
-    .filter((r) => r.date === latestDate)
+  const latestPrices = teamPriceRows.filter((r) => r.date === latestDate);
+  const topTeams = (latestPrices.length > 0 ? latestPrices : teamPriceRows)
     .sort((a, b) => b.dollar_price - a.dollar_price)
     .slice(0, 10)
     .map((t) => ({

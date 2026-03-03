@@ -51,17 +51,13 @@ export const CREDITS_FALLBACK_INTERVAL = 60 * 60 * 1000; // hourly when low
 
 // ─── Pricing engine constants (MeasureMe-validated) ──────────
 export const INITIAL_ELO = 1500;
-export const BT_ITERATIONS = 50;
 export const WINDOW_DAYS = 60;
-export const DECAY_HALF_LIFE = 14;
 export const PRICE_SLOPE = 5;                    // price = max(FLOOR, (elo-ZERO)/SLOPE)
 export const PRICE_ZERO = 800;                   // elo zero point for pricing
 export const PRICE_FLOOR = 10;                   // minimum dollar price
 export const SHOCK_K = 20;                       // flat K-factor for match shocks (xG amplifies)
 export const CARRY_DECAY_RATE = 0.001;           // daily decay rate toward 45d MA
 export const MA_WINDOW = 45;                     // moving average window for carry anchor
-export const BT_FORWARD_DAYS = 14;               // include upcoming matches in BT window
-export const FRESHNESS_HALFLIFE_HOURS = 72;       // odds staleness half-life (hours)
 export const LIVE_SHOCK_DISCOUNT = 0.5;           // discount factor for in-play shocks
 export const BATCH_SIZE = 500;
 
@@ -74,10 +70,6 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Ligue 1": "soccer_france_ligue_one_winner",
 };
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
-
-// ─── EMA fast-response layer ────────────────────────────────
-export const EMA_SPAN = 5;                         // 5-day EMA
-export const EMA_ALPHA = 2 / (EMA_SPAN + 1);      // ≈ 0.333
 
 // ─── Hourly baseline polling ─────────────────────────────────
 export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour

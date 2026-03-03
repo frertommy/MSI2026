@@ -1,16 +1,19 @@
 /**
  * Standalone pricing engine runner.
- * Usage: cd scheduler && npx tsx src/scripts/run-pricing.ts
+ * Usage:
+ *   cd scheduler && npx tsx src/scripts/run-pricing.ts           # full replay
+ *   cd scheduler && npx tsx src/scripts/run-pricing.ts --incremental  # incremental (last 2 days)
  */
 import "dotenv/config";
 import { log } from "../logger.js";
 import { runPricingEngine } from "../services/pricing-engine.js";
 
 async function main() {
+  const incremental = process.argv.includes("--incremental");
   const t0 = Date.now();
-  log.info("═══ Running pricing engine (standalone) ═══");
+  log.info(`═══ Running pricing engine (${incremental ? "incremental" : "full replay"}) ═══`);
 
-  const result = await runPricingEngine();
+  const result = await runPricingEngine({ incremental });
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   log.info(`Done in ${elapsed}s`);
