@@ -151,6 +151,15 @@ export default async function Home() {
     fetchLatestPrices(),
   ]);
 
+  // Identify teams with live matches
+  const liveTeams = new Set<string>();
+  for (const m of matches) {
+    if (m.status === "live") {
+      liveTeams.add(m.home_team);
+      liveTeams.add(m.away_team);
+    }
+  }
+
   const teams = computeTeamRows(matches, priceMap);
   const leagues = [...new Set(teams.map((t) => t.league))].sort();
 
@@ -185,7 +194,7 @@ export default async function Home() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
-        <TeamTable teams={teams} leagues={leagues} />
+        <TeamTable teams={teams} leagues={leagues} liveTeams={liveTeams} />
       </main>
     </div>
   );

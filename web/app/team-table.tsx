@@ -51,9 +51,11 @@ function wdlBar(w: number, d: number, l: number) {
 export function TeamTable({
   teams,
   leagues,
+  liveTeams,
 }: {
   teams: TeamRow[];
   leagues: string[];
+  liveTeams?: Set<string>;
 }) {
   const router = useRouter();
   const [activeLeague, setActiveLeague] = useState<string>("All");
@@ -125,7 +127,15 @@ export function TeamTable({
                   {t.rank}
                 </td>
                 <td className="py-2 px-3 text-left font-semibold text-foreground group-hover:text-accent-green transition-colors">
-                  {t.team}
+                  <span className="inline-flex items-center gap-2">
+                    {t.team}
+                    {liveTeams?.has(t.team) && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded bg-accent-green/15 text-accent-green border border-accent-green/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />
+                        Live
+                      </span>
+                    )}
+                  </span>
                 </td>
                 <td
                   className={`py-2 px-3 text-left text-xs font-bold ${

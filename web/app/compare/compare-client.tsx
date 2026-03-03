@@ -57,6 +57,14 @@ interface ProbRow {
   bookmaker_away_win: number;
 }
 
+interface LivePriceRow {
+  timestamp: string;
+  dollar_price: number;
+  implied_elo: number;
+  blend_mode: string;
+  fixture_id: number | null;
+}
+
 // Enriched match for display
 interface EnrichedMatch {
   fixture_id: number;
@@ -194,6 +202,7 @@ export function CompareClient({
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [xgData, setXgData] = useState<XgRow[]>([]);
   const [probs, setProbs] = useState<ProbRow[]>([]);
+  const [livePrices, setLivePrices] = useState<LivePriceRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [timeRange, setTimeRange] = useState(9999);
 
@@ -299,6 +308,20 @@ export function CompareClient({
         ...((awayProbs.data ?? []) as ProbRow[]),
       ])
     );
+
+    // Fetch live prices (last 24h) — gracefully handles missing table
+    try {
+      const { data: liveData } = await supabase
+        .from("live_prices")
+        .select("timestamp, dollar_price, implied_elo, blend_mode, fixture_id")
+        .eq("team", team)
+        .eq("model", "oracle")
+        .gte("timestamp", new Date(Date.now() - 86400000).toISOString())
+        .order("timestamp", { ascending: true });
+      setLivePrices((liveData ?? []) as LivePriceRow[]);
+    } catch {
+      setLivePrices([]);
+    }
 
     setLoading(false);
   }, []);
@@ -461,6 +484,24 @@ export function CompareClient({
       })),
     [filteredPrices]
   );
+
+  // Live price overlay data — merge into chartData by date, add livePrice field
+  const chartDataWithLive = useMemo(() => {
+    if (livePrices.length === 0) return chartData;
+
+    // Build a map of date → latest live price for that date
+    const livePriceByDate = new Map<string, number>();
+    for (const lp of livePrices) {
+      const date = lp.timestamp.slice(0, 10);
+      livePriceByDate.set(date, lp.dollar_price); // latest wins (sorted asc)
+    }
+
+    // Merge into chart data
+    return chartData.map((pt) => ({
+      ...pt,
+      livePrice: livePriceByDate.get(pt.date) ?? null,
+    }));
+  }, [chartData, livePrices]);
 
   // Match dots on chart
   const matchDots = useMemo(() => {
@@ -921,6 +962,12 @@ export function CompareClient({
               </h2>
               {/* Legend */}
               <div className="flex items-center gap-4 text-xs font-mono text-muted">
+                {livePrices.length > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #00e676" }} />
+                    <span className="text-[#00e676]">Live</span>
+                  </span>
+                )}
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-accent-green inline-block" />
                   Win
@@ -938,7 +985,7 @@ export function CompareClient({
             </div>
             <ResponsiveContainer width="100%" height={400}>
               <LineChart
-                data={chartData}
+                data={chartDataWithLive}
                 margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
               >
                 <CartesianGrid
@@ -969,9 +1016,9 @@ export function CompareClient({
                 <Tooltip
                   contentStyle={tooltipStyle}
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  formatter={((value: any) => [
+                  formatter={((value: any, name: any) => [
                     `$${Number(value).toFixed(2)}`,
-                    "Price",
+                    name === "livePrice" ? "Live" : "Price",
                   ]) as never}
                   labelFormatter={(label: any) => String(label)}
                 />
@@ -983,6 +1030,18 @@ export function CompareClient({
                   strokeWidth={2}
                   connectNulls
                 />
+                {/* Live price overlay (green dashed) */}
+                {livePrices.length > 0 && (
+                  <Line
+                    type="monotone"
+                    dataKey="livePrice"
+                    stroke="#00e676"
+                    dot={false}
+                    strokeWidth={2}
+                    strokeDasharray="6 3"
+                    connectNulls
+                  />
+                )}
                 {/* Match event dots */}
                 {matchDots.map((dot, i) => (
                   <ReferenceDot
