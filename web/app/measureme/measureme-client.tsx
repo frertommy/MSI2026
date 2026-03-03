@@ -1,17 +1,18 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import type { MeasureMeRow } from "./page";
+import type { MeasureMeRow, TeamEloRow } from "./page";
 
-// ─── Constants ───────────────────────────────────────────────
+// ─── Index Definitions ───────────────────────────────────────
 const INDEX_DEFS = [
   {
     key: "surprise_r2_score" as const,
     rawKey: "surprise_r2" as const,
     name: "Surprise R\u00B2",
     weight: "25%",
-    description: "How well price moves correlate with match surprise magnitude",
-    target: "Higher is better (R\u00B2 \u00D7 150, capped at 100)",
+    description:
+      "How well price moves correlate with match surprise magnitude",
+    target: "Higher is better (R\u00B2 \u00D7 150, cap 100)",
     rawFmt: (v: number) => v.toFixed(4),
   },
   {
@@ -19,19 +20,19 @@ const INDEX_DEFS = [
     rawKey: "drift_neutrality" as const,
     name: "Drift Neutrality",
     weight: "15%",
-    description: "Mean daily return across all teams should be near zero",
+    description: "Mean daily price return across all teams should be ~0%",
     target: "Closer to 0 is better",
     rawFmt: (v: number) => (v * 100).toFixed(4) + "%",
   },
   {
-    key: "match_share_score" as const,
-    rawKey: "match_variance_share" as const,
+    key: "floor_hit_score" as const,
+    rawKey: "floor_hit_pct" as const,
     name: "Floor Hit %",
     weight: "15%",
     description:
-      "% of team-day prices stuck at $10 floor (information loss from high slope)",
+      "% of team-day prices at $10 floor \u2014 price discovery stops",
     target: "0% ideal (lower is better)",
-    rawFmt: (v: number) => v.toFixed(1) + "%",
+    rawFmt: (v: number) => v.toFixed(2) + "%",
   },
   {
     key: "kurtosis_score" as const,
@@ -47,8 +48,7 @@ const INDEX_DEFS = [
     rawKey: "vol_uniformity_ratio" as const,
     name: "Vol Uniformity",
     weight: "10%",
-    description:
-      "Max/min annualized vol ratio across Elo tiers (top/mid/bot 25%)",
+    description: "Max/min annualized vol across Elo tiers (top/mid/bot 25%)",
     target: "< 1.5\u00D7 ideal",
     rawFmt: (v: number) => v.toFixed(2) + "\u00D7",
   },
@@ -57,8 +57,7 @@ const INDEX_DEFS = [
     rawKey: "mean_rev_sharpe" as const,
     name: "MR Sharpe",
     weight: "15%",
-    description:
-      "Annualized Sharpe of mean-reversion strategy (long after loss, short after win)",
+    description: "Mean-reversion strategy Sharpe (long loss, short win, 3d)",
     target: "|SR| < 0.3 ideal (no free lunch)",
     rawFmt: (v: number) => v.toFixed(3),
   },
@@ -67,45 +66,24 @@ const INDEX_DEFS = [
     rawKey: "info_ratio" as const,
     name: "Information Ratio",
     weight: "10%",
-    description:
-      "Spearman rank correlation between final Elo rank and actual league points",
-    target: "Higher is better (\u00D7110, capped at 100)",
+    description: "Spearman: final price rank vs actual league points",
+    target: "Higher is better (\u00D7110, cap 100)",
     rawFmt: (v: number) => v.toFixed(3),
   },
 ] as const;
 
-const REFERENCE_TEAMS = [
-  { name: "Arsenal FC", elo: 1838 },
-  { name: "Manchester City FC", elo: 1810 },
-  { name: "Liverpool FC", elo: 1830 },
-  { name: "FC Barcelona", elo: 1860 },
-  { name: "Real Madrid CF", elo: 1855 },
-  { name: "FC Bayern M\u00FCnchen", elo: 1820 },
-  { name: "FC Internazionale Milano", elo: 1780 },
-  { name: "Paris Saint-Germain FC", elo: 1790 },
-  { name: "Wolverhampton Wanderers FC", elo: 1047 },
-  { name: "US Lecce", elo: 1200 },
-];
-
 const INITIAL_TABLE_ROWS = 50;
 
 // ─── Helpers ─────────────────────────────────────────────────
-// Composite is stored as 10x integer (e.g. 756 = 75.6)
-function fmtComposite(v: number): string {
-  return (v / 10).toFixed(1);
-}
-
-// ─── Score color helper ──────────────────────────────────────
 function scoreColor(score: number): string {
   if (score >= 70) return "text-accent-green";
   if (score >= 40) return "text-amber-400";
   return "text-red-400";
 }
 
-function compositeColor(score10x: number): string {
-  const score = score10x / 10;
+function compositeColor(score: number): string {
   if (score >= 70) return "text-accent-green";
-  if (score >= 40) return "text-amber-400";
+  if (score >= 50) return "text-amber-400";
   return "text-red-400";
 }
 
@@ -120,10 +98,11 @@ type NumericKey =
   | "slope"
   | "k_factor"
   | "decay"
+  | "zero_point"
   | "composite_score"
   | "surprise_r2_score"
   | "drift_score"
-  | "match_share_score"
+  | "floor_hit_score"
   | "kurtosis_score"
   | "vol_uni_score"
   | "mean_rev_score"
@@ -137,10 +116,11 @@ type SortCol = "rank" | NumericKey;
 interface Props {
   results: MeasureMeRow[];
   runId: string;
+  teamElos: TeamEloRow[];
 }
 
 // ─── Component ──────────────────────────────────────────────
-export function MeasureMeClient({ results, runId }: Props) {
+export function MeasureMeClient({ results, runId, teamElos }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const [sortCol, setSortCol] = useState<SortCol>("composite_score");
@@ -149,7 +129,6 @@ export function MeasureMeClient({ results, runId }: Props) {
   const best = results[0];
   const selected = results[selectedIdx] ?? best;
 
-  // Sorted results
   const sorted = useMemo(() => {
     const indexed = results.map((r, i) => ({ ...r, origRank: i + 1 }));
     indexed.sort((a, b) => {
@@ -159,9 +138,7 @@ export function MeasureMeClient({ results, runId }: Props) {
           : b.origRank - a.origRank;
       }
       const col: NumericKey = sortCol;
-      const aVal = a[col];
-      const bVal = b[col];
-      return sortAsc ? aVal - bVal : bVal - aVal;
+      return sortAsc ? a[col] - b[col] : b[col] - a[col];
     });
     return indexed;
   }, [results, sortCol, sortAsc]);
@@ -169,9 +146,8 @@ export function MeasureMeClient({ results, runId }: Props) {
   const displayRows = showAll ? sorted : sorted.slice(0, INITIAL_TABLE_ROWS);
 
   function handleSort(col: SortCol) {
-    if (col === sortCol) {
-      setSortAsc(!sortAsc);
-    } else {
+    if (col === sortCol) setSortAsc(!sortAsc);
+    else {
       setSortCol(col);
       setSortAsc(false);
     }
@@ -182,23 +158,37 @@ export function MeasureMeClient({ results, runId }: Props) {
     return sortAsc ? " \u25B2" : " \u25BC";
   }
 
-  // Find the original index of a row in the results array
   function selectRow(row: MeasureMeRow) {
     const idx = results.findIndex(
       (r) =>
         r.slope === row.slope &&
         r.k_factor === row.k_factor &&
-        r.decay === row.decay
+        r.decay === row.decay &&
+        r.zero_point === row.zero_point
     );
     if (idx >= 0) setSelectedIdx(idx);
   }
+
+  // Price implications: show top teams + bottom teams with real Elos
+  const priceImplications = useMemo(() => {
+    if (teamElos.length === 0) return [];
+    const top = teamElos.slice(0, 10);
+    const bottom = teamElos.slice(-5);
+    const combined = [...top, ...bottom];
+    return combined.map((t) => ({
+      team: t.team,
+      elo: t.implied_elo,
+      price: Math.max(10, (t.implied_elo - selected.zero_point) / selected.slope),
+      atFloor: (t.implied_elo - selected.zero_point) / selected.slope <= 10,
+    }));
+  }, [teamElos, selected.slope, selected.zero_point]);
 
   if (!best) return null;
 
   return (
     <div className="space-y-8">
       {/* ── Section 1: Winner Banner ──────────────────────── */}
-      <div className="border-2 border-accent-green rounded-lg p-6 bg-card">
+      <div className="border-2 border-accent-green rounded-lg p-6 bg-surface">
         <div className="flex items-start justify-between gap-6 flex-wrap">
           <div>
             <div className="flex items-center gap-3 mb-3">
@@ -211,12 +201,10 @@ export function MeasureMeClient({ results, runId }: Props) {
               </span>
             </div>
 
-            <div className="grid grid-cols-3 gap-x-8 gap-y-2 text-sm font-mono">
+            <div className="grid grid-cols-4 gap-x-6 gap-y-2 text-sm font-mono">
               <div>
                 <span className="text-muted">Slope</span>{" "}
-                <span className="text-foreground font-bold">
-                  {best.slope}
-                </span>
+                <span className="text-foreground font-bold">{best.slope}</span>
               </div>
               <div>
                 <span className="text-muted">K</span>{" "}
@@ -226,8 +214,12 @@ export function MeasureMeClient({ results, runId }: Props) {
               </div>
               <div>
                 <span className="text-muted">Decay</span>{" "}
+                <span className="text-foreground font-bold">{best.decay}</span>
+              </div>
+              <div>
+                <span className="text-muted">ZeroPoint</span>{" "}
                 <span className="text-foreground font-bold">
-                  {best.decay}
+                  {best.zero_point}
                 </span>
               </div>
               <div>
@@ -248,31 +240,43 @@ export function MeasureMeClient({ results, runId }: Props) {
                   {best.surprise_r2.toFixed(4)}
                 </span>
               </div>
+              <div>
+                <span className="text-muted">Floor</span>{" "}
+                <span className="text-foreground">
+                  {best.teams_at_floor} teams
+                </span>
+              </div>
             </div>
           </div>
 
           <div className="text-right">
             <div className="text-5xl font-bold text-accent-green font-mono">
-              {fmtComposite(best.composite_score)}
+              {best.composite_score}
             </div>
             <div className="text-xs text-muted font-mono mt-1">
-              composite
+              composite /100
             </div>
           </div>
         </div>
 
-        {/* Copyable config snippet */}
+        {/* Config snippet */}
         <div className="mt-4 bg-background rounded-md p-3 text-xs font-mono text-muted border border-border">
           <span className="text-foreground/50">// config.ts</span>
           <br />
-          <span className="text-accent-green">export const</span>{" "}
-          SLOPE = {best.slope};
+          <span className="text-accent-green">export const</span> PRICE_SLOPE ={" "}
+          {best.slope};
+          <br />
+          <span className="text-accent-green">export const</span> PRICE_ZERO ={" "}
+          {best.zero_point};
+          <br />
+          <span className="text-accent-green">export const</span> PRICE_FLOOR =
+          10;
           <br />
           <span className="text-accent-green">export const</span>{" "}
-          K_FACTOR = {best.k_factor};
+          ORACLE_SHOCK_K = {best.k_factor};
           <br />
-          <span className="text-accent-green">export const</span>{" "}
-          DECAY_RATE = {best.decay};
+          <span className="text-accent-green">export const</span> CARRY_DECAY ={" "}
+          {best.decay};
         </div>
       </div>
 
@@ -282,7 +286,7 @@ export function MeasureMeClient({ results, runId }: Props) {
           Index Breakdown{" "}
           <span className="text-muted font-normal">
             &mdash; slope={selected.slope} K={selected.k_factor} decay=
-            {selected.decay}
+            {selected.decay} zp={selected.zero_point}
           </span>
         </h2>
 
@@ -294,7 +298,7 @@ export function MeasureMeClient({ results, runId }: Props) {
             return (
               <div
                 key={def.key}
-                className="border border-border rounded-lg p-3 bg-card"
+                className="border border-border rounded-lg p-3 bg-surface"
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-foreground uppercase">
@@ -305,7 +309,6 @@ export function MeasureMeClient({ results, runId }: Props) {
                   </span>
                 </div>
 
-                {/* Score bar */}
                 <div className="flex items-center gap-2 mb-2">
                   <div className="flex-1 h-2 bg-background rounded-full overflow-hidden">
                     <div
@@ -321,9 +324,7 @@ export function MeasureMeClient({ results, runId }: Props) {
                 </div>
 
                 <div className="text-[10px] font-mono text-muted space-y-0.5">
-                  <div>
-                    Raw: {def.rawFmt(raw)}
-                  </div>
+                  <div>Raw: {def.rawFmt(raw)}</div>
                   <div>{def.description}</div>
                   <div className="text-foreground/40">
                     Target: {def.target}
@@ -335,7 +336,7 @@ export function MeasureMeClient({ results, runId }: Props) {
         </div>
       </div>
 
-      {/* ── Section 3: Sortable Results Table ─────────────── */}
+      {/* ── Section 3: Results Table ──────────────────────── */}
       <div>
         <h2 className="text-sm font-bold text-foreground uppercase tracking-wider mb-3">
           All Configs
@@ -344,23 +345,26 @@ export function MeasureMeClient({ results, runId }: Props) {
         <div className="overflow-x-auto border border-border rounded-lg">
           <table className="w-full text-xs font-mono">
             <thead>
-              <tr className="bg-card border-b border-border text-muted">
-                {([
-                  ["rank", "#"],
-                  ["slope", "Slope"],
-                  ["k_factor", "K"],
-                  ["decay", "Decay"],
-                  ["composite_score", "Score"],
-                  ["surprise_r2_score", "R\u00B2"],
-                  ["drift_score", "Drift"],
-                  ["match_share_score", "Match%"],
-                  ["kurtosis_score", "Kurt"],
-                  ["vol_uni_score", "Vol\u00D7"],
-                  ["mean_rev_score", "MR"],
-                  ["info_score", "Info"],
-                  ["avg_match_move_pct", "Avg\u26A1%"],
-                  ["avg_annual_vol", "\u03C3/yr"],
-                ] as [SortCol, string][]).map(([col, label]) => (
+              <tr className="bg-surface border-b border-border text-muted">
+                {(
+                  [
+                    ["rank", "#"],
+                    ["slope", "Slope"],
+                    ["k_factor", "K"],
+                    ["decay", "Decay"],
+                    ["zero_point", "ZP"],
+                    ["composite_score", "Score"],
+                    ["surprise_r2_score", "R\u00B2"],
+                    ["drift_score", "Drift"],
+                    ["floor_hit_score", "Floor"],
+                    ["kurtosis_score", "Kurt"],
+                    ["vol_uni_score", "Vol\u00D7"],
+                    ["mean_rev_score", "MR"],
+                    ["info_score", "Info"],
+                    ["avg_match_move_pct", "Avg\u26A1%"],
+                    ["avg_annual_vol", "\u03C3/yr"],
+                  ] as [SortCol, string][]
+                ).map(([col, label]) => (
                   <th
                     key={col}
                     className="px-2 py-2 text-left cursor-pointer hover:text-foreground transition-colors whitespace-nowrap"
@@ -377,18 +381,19 @@ export function MeasureMeClient({ results, runId }: Props) {
                 const isSelected =
                   row.slope === selected.slope &&
                   row.k_factor === selected.k_factor &&
-                  row.decay === selected.decay;
+                  row.decay === selected.decay &&
+                  row.zero_point === selected.zero_point;
                 const isBest = row.origRank === 1;
 
                 return (
                   <tr
-                    key={`${row.slope}-${row.k_factor}-${row.decay}`}
+                    key={`${row.slope}-${row.k_factor}-${row.decay}-${row.zero_point}`}
                     className={`border-b border-border/50 cursor-pointer transition-colors ${
                       isBest
                         ? "bg-accent-green/10 hover:bg-accent-green/20"
                         : isSelected
-                          ? "bg-card hover:bg-card"
-                          : "hover:bg-card/50"
+                          ? "bg-surface hover:bg-surface"
+                          : "hover:bg-surface/50"
                     }`}
                     onClick={() => selectRow(row)}
                   >
@@ -404,10 +409,13 @@ export function MeasureMeClient({ results, runId }: Props) {
                     <td className="px-2 py-1.5 text-foreground">
                       {row.decay}
                     </td>
+                    <td className="px-2 py-1.5 text-foreground">
+                      {row.zero_point}
+                    </td>
                     <td
                       className={`px-2 py-1.5 font-bold ${compositeColor(row.composite_score)}`}
                     >
-                      {fmtComposite(row.composite_score)}
+                      {row.composite_score}
                     </td>
                     <td
                       className={`px-2 py-1.5 ${scoreColor(row.surprise_r2_score)}`}
@@ -420,9 +428,9 @@ export function MeasureMeClient({ results, runId }: Props) {
                       {row.drift_score}
                     </td>
                     <td
-                      className={`px-2 py-1.5 ${scoreColor(row.match_share_score)}`}
+                      className={`px-2 py-1.5 ${scoreColor(row.floor_hit_score)}`}
                     >
-                      {row.match_share_score}
+                      {row.floor_hit_score}
                     </td>
                     <td
                       className={`px-2 py-1.5 ${scoreColor(row.kurtosis_score)}`}
@@ -457,7 +465,6 @@ export function MeasureMeClient({ results, runId }: Props) {
           </table>
         </div>
 
-        {/* Show all toggle */}
         {!showAll && sorted.length > INITIAL_TABLE_ROWS && (
           <div className="text-center mt-4">
             <button
@@ -485,46 +492,56 @@ export function MeasureMeClient({ results, runId }: Props) {
         <h2 className="text-sm font-bold text-foreground uppercase tracking-wider mb-3">
           Price Implications{" "}
           <span className="text-muted font-normal">
-            &mdash; slope={selected.slope}
+            &mdash; slope={selected.slope} zeroPoint={selected.zero_point}
           </span>
         </h2>
 
-        <div className="border border-border rounded-lg bg-card overflow-hidden">
-          <table className="w-full text-xs font-mono">
-            <thead>
-              <tr className="border-b border-border text-muted">
-                <th className="px-3 py-2 text-left">Team</th>
-                <th className="px-3 py-2 text-right">Ref Elo</th>
-                <th className="px-3 py-2 text-right">Price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {REFERENCE_TEAMS.map((t) => {
-                const price = Math.max(10, (t.elo - 1000) / selected.slope);
-                return (
+        {priceImplications.length === 0 ? (
+          <p className="text-xs text-muted font-mono">
+            No team Elo data available. Run the pricing engine first.
+          </p>
+        ) : (
+          <div className="border border-border rounded-lg bg-surface overflow-hidden">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="border-b border-border text-muted">
+                  <th className="px-3 py-2 text-left">Team</th>
+                  <th className="px-3 py-2 text-right">Current Elo</th>
+                  <th className="px-3 py-2 text-right">Price</th>
+                  <th className="px-3 py-2 text-right"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {priceImplications.map((t) => (
                   <tr
-                    key={t.name}
+                    key={t.team}
                     className="border-b border-border/50"
                   >
-                    <td className="px-3 py-1.5 text-foreground">
-                      {t.name}
-                    </td>
+                    <td className="px-3 py-1.5 text-foreground">{t.team}</td>
                     <td className="px-3 py-1.5 text-right text-muted">
-                      {t.elo}
+                      {Math.round(t.elo)}
                     </td>
                     <td className="px-3 py-1.5 text-right text-accent-green font-bold">
-                      ${price.toFixed(0)}
+                      ${t.price.toFixed(0)}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {t.atFloor && (
+                        <span className="text-accent-red text-[10px]">
+                          \u26A0\uFE0F AT FLOOR
+                        </span>
+                      )}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <p className="text-[10px] text-muted font-mono mt-2">
-          Formula: price = max($10, (elo &minus; 1000) / slope)
-          &middot; Reference Elos are approximate starting values
+          Formula: price = max($10, (elo &minus; {selected.zero_point}) /{" "}
+          {selected.slope})
+          &middot; Current Elos from latest oracle run
         </p>
       </div>
 

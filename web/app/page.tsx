@@ -165,9 +165,23 @@ export default async function Home() {
               MSI 2026
             </h1>
           </div>
-          <span className="text-xs text-muted font-mono">
-            {teams.length} teams &middot; {matches.length} matches
-          </span>
+          <div className="flex items-center gap-4">
+            <a
+              href="/measureme"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              MeasureMe &rarr;
+            </a>
+            <a
+              href="/v3"
+              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
+            >
+              Simulation &rarr;
+            </a>
+            <span className="text-xs text-muted font-mono">
+              {teams.length} teams &middot; {matches.length} matches
+            </span>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">

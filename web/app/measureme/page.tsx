@@ -8,12 +8,13 @@ export interface MeasureMeRow {
   slope: number;
   k_factor: number;
   decay: number;
+  zero_point: number;
   composite_score: number;
 
   // Raw index values
   surprise_r2: number;
   drift_neutrality: number;
-  match_variance_share: number;
+  floor_hit_pct: number;
   kurtosis: number;
   vol_uniformity_ratio: number;
   mean_rev_sharpe: number;
@@ -22,7 +23,7 @@ export interface MeasureMeRow {
   // Index scores (0-100)
   surprise_r2_score: number;
   drift_score: number;
-  match_share_score: number;
+  floor_hit_score: number;
   kurtosis_score: number;
   vol_uni_score: number;
   mean_rev_score: number;
@@ -33,6 +34,12 @@ export interface MeasureMeRow {
   avg_annual_vol: number;
   total_matches_evaluated: number;
   total_teams: number;
+  teams_at_floor: number;
+}
+
+export interface TeamEloRow {
+  team: string;
+  implied_elo: number;
 }
 
 export const dynamic = "force-dynamic";
@@ -84,9 +91,7 @@ export default async function MeasureMePage() {
   while (true) {
     const { data, error } = await supabase
       .from("measureme_results")
-      .select(
-        "id, run_id, slope, k_factor, decay, composite_score, surprise_r2, drift_neutrality, match_variance_share, kurtosis, vol_uniformity_ratio, mean_rev_sharpe, info_ratio, surprise_r2_score, drift_score, match_share_score, kurtosis_score, vol_uni_score, mean_rev_score, info_score, avg_match_move_pct, avg_annual_vol, total_matches_evaluated, total_teams"
-      )
+      .select("*")
       .eq("run_id", runId)
       .order("composite_score", { ascending: false })
       .range(from, from + pageSize - 1);
@@ -99,6 +104,25 @@ export default async function MeasureMePage() {
     allRows.push(...(data as MeasureMeRow[]));
     if (data.length < pageSize) break;
     from += pageSize;
+  }
+
+  // Fetch latest team Elos from team_prices for Price Implications
+  let teamElos: TeamEloRow[] = [];
+  const { data: latestDate } = await supabase
+    .from("team_prices")
+    .select("date")
+    .eq("model", "oracle")
+    .order("date", { ascending: false })
+    .limit(1);
+
+  if (latestDate?.[0]?.date) {
+    const { data: eloData } = await supabase
+      .from("team_prices")
+      .select("team, implied_elo")
+      .eq("model", "oracle")
+      .eq("date", latestDate[0].date)
+      .order("implied_elo", { ascending: false });
+    teamElos = (eloData ?? []) as TeamEloRow[];
   }
 
   return (
@@ -117,18 +141,6 @@ export default async function MeasureMePage() {
           </h1>
           <div className="flex items-center gap-4 ml-auto">
             <a
-              href="/matches"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Matches &rarr;
-            </a>
-            <a
-              href="/analytics"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Analytics &rarr;
-            </a>
-            <a
               href="/v3"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
@@ -141,7 +153,11 @@ export default async function MeasureMePage() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
-        <MeasureMeClient results={allRows} runId={runId} />
+        <MeasureMeClient
+          results={allRows}
+          runId={runId}
+          teamElos={teamElos}
+        />
       </main>
     </div>
   );
