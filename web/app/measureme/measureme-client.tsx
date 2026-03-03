@@ -9,7 +9,7 @@ const INDEX_DEFS = [
     key: "surprise_r2_score" as const,
     rawKey: "surprise_r2" as const,
     name: "Surprise R\u00B2",
-    weight: "25%",
+    weight: "20%",
     description:
       "How well price moves correlate with match surprise magnitude",
     target: "Higher is better (R\u00B2 \u00D7 143, cap 100)",
@@ -19,7 +19,7 @@ const INDEX_DEFS = [
     key: "drift_score" as const,
     rawKey: "drift_neutrality" as const,
     name: "Drift Neutrality",
-    weight: "15%",
+    weight: "8%",
     description: "Mean daily price return across all teams should be ~0%",
     target: "Closer to 0 is better",
     rawFmt: (v: number) => (v * 100).toFixed(4) + "%",
@@ -28,7 +28,7 @@ const INDEX_DEFS = [
     key: "floor_hit_score" as const,
     rawKey: "floor_hit_pct" as const,
     name: "Floor Hit %",
-    weight: "15%",
+    weight: "5%",
     description:
       "% of team-day prices at $10 floor \u2014 price discovery stops",
     target: "0% ideal (lower is better)",
@@ -38,7 +38,7 @@ const INDEX_DEFS = [
     key: "kurtosis_score" as const,
     rawKey: "kurtosis" as const,
     name: "Return Kurtosis",
-    weight: "10%",
+    weight: "5%",
     description: "Tail thickness of return distribution (m4/m2\u00B2)",
     target: "4\u201310 ideal",
     rawFmt: (v: number) => v.toFixed(2),
@@ -47,7 +47,7 @@ const INDEX_DEFS = [
     key: "vol_uni_score" as const,
     rawKey: "vol_uniformity_ratio" as const,
     name: "Vol Uniformity",
-    weight: "10%",
+    weight: "5%",
     description: "Max/min annualized vol across Elo tiers (top/mid/bot 25%)",
     target: "< 1.5\u00D7 ideal",
     rawFmt: (v: number) => v.toFixed(2) + "\u00D7",
@@ -69,6 +69,35 @@ const INDEX_DEFS = [
     description: "Spearman: final price rank vs actual league points",
     target: "Higher is better (\u00D7110, cap 100)",
     rawFmt: (v: number) => v.toFixed(3),
+  },
+  {
+    key: "odds_responsiveness_score" as const,
+    rawKey: "odds_responsiveness" as const,
+    name: "Odds Responsive",
+    weight: "15%",
+    description:
+      "Correlation between odds changes and price moves on non-match days",
+    target: "Higher is better (\u00D7125, cap 100)",
+    rawFmt: (v: number) => v.toFixed(3),
+  },
+  {
+    key: "venue_stability_score" as const,
+    rawKey: "venue_stability" as const,
+    name: "Venue Stability",
+    weight: "10%",
+    description:
+      "Price move ratio on fixture-transition days vs normal non-match days",
+    target: "Ratio \u2248 1.0 ideal",
+    rawFmt: (v: number) => v.toFixed(2) + "\u00D7",
+  },
+  {
+    key: "between_match_vol_score" as const,
+    rawKey: "between_match_vol" as const,
+    name: "Between-Match Vol",
+    weight: "7%",
+    description: "Annualized vol of non-match-day price returns",
+    target: "\u226520% ideal (prices move between matches)",
+    rawFmt: (v: number) => v.toFixed(1) + "%",
   },
 ] as const;
 
@@ -98,6 +127,7 @@ type NumericKey =
   | "k_factor"
   | "decay"
   | "zero_point"
+  | "prematch_weight"
   | "composite_score"
   | "surprise_r2_score"
   | "drift_score"
@@ -106,6 +136,9 @@ type NumericKey =
   | "vol_uni_score"
   | "mean_rev_score"
   | "info_score"
+  | "odds_responsiveness_score"
+  | "venue_stability_score"
+  | "between_match_vol_score"
   | "avg_match_move_pct"
   | "avg_annual_vol";
 
@@ -167,7 +200,8 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
       (r) =>
         r.k_factor === row.k_factor &&
         r.decay === row.decay &&
-        r.zero_point === row.zero_point
+        r.zero_point === row.zero_point &&
+        r.prematch_weight === row.prematch_weight
     );
     if (idx >= 0) setSelectedIdx(idx);
   }
@@ -204,7 +238,7 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
               </span>
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-6 gap-y-2 text-sm font-mono">
+            <div className="grid grid-cols-3 sm:grid-cols-7 gap-x-6 gap-y-2 text-sm font-mono">
               <div>
                 <span className="text-muted">K</span>{" "}
                 <span className="text-foreground font-bold">
@@ -219,6 +253,12 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                 <span className="text-muted">ZeroPoint</span>{" "}
                 <span className="text-foreground font-bold">
                   {best.zero_point}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted">PW</span>{" "}
+                <span className="text-foreground font-bold">
+                  {best.prematch_weight === -1 ? "DRIFT" : best.prematch_weight}
                 </span>
               </div>
               <div>
@@ -270,6 +310,9 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
           <br />
           <span className="text-accent-green">export const</span> CARRY_DECAY ={" "}
           {best.decay};
+          <br />
+          <span className="text-accent-green">export const</span>{" "}
+          PREMATCH_WEIGHT = {best.prematch_weight === -1 ? "N/A (drift)" : best.prematch_weight};
         </div>
       </div>
 
@@ -279,7 +322,7 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
           Index Breakdown{" "}
           <span className="text-muted font-normal">
             &mdash; K={selected.k_factor} decay={selected.decay} zp=
-            {selected.zero_point}
+            {selected.zero_point} pw={selected.prematch_weight === -1 ? "DRIFT" : selected.prematch_weight}
           </span>
         </h2>
 
@@ -344,7 +387,7 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                     ["rank", "#"],
                     ["k_factor", "K"],
                     ["decay", "Decay"],
-                    ["zero_point", "ZP"],
+                    ["prematch_weight", "PW"],
                     ["composite_score", "Score"],
                     ["surprise_r2_score", "R\u00B2"],
                     ["drift_score", "Drift"],
@@ -353,6 +396,9 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                     ["vol_uni_score", "Vol\u00D7"],
                     ["mean_rev_score", "MR"],
                     ["info_score", "Info"],
+                    ["odds_responsiveness_score", "OddsR"],
+                    ["venue_stability_score", "Venue"],
+                    ["between_match_vol_score", "BtwnV"],
                     ["avg_match_move_pct", "Avg\u26A1%"],
                     ["avg_annual_vol", "\u03C3/yr"],
                   ] as [SortCol, string][]
@@ -373,12 +419,13 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                 const isSelected =
                   row.k_factor === selected.k_factor &&
                   row.decay === selected.decay &&
-                  row.zero_point === selected.zero_point;
+                  row.zero_point === selected.zero_point &&
+                  row.prematch_weight === selected.prematch_weight;
                 const isBest = row.origRank === 1;
 
                 return (
                   <tr
-                    key={`${row.k_factor}-${row.decay}-${row.zero_point}`}
+                    key={`${row.k_factor}-${row.decay}-${row.zero_point}-${row.prematch_weight}`}
                     className={`border-b border-border/50 cursor-pointer transition-colors ${
                       isBest
                         ? "bg-accent-green/10 hover:bg-accent-green/20"
@@ -398,7 +445,7 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                       {row.decay}
                     </td>
                     <td className="px-2 py-1.5 text-foreground">
-                      {row.zero_point}
+                      {row.prematch_weight === -1 ? "DRIFT" : row.prematch_weight}
                     </td>
                     <td
                       className={`px-2 py-1.5 font-bold ${compositeColor(row.composite_score)}`}
@@ -439,6 +486,21 @@ export function MeasureMeClient({ results, runId, teamElos }: Props) {
                       className={`px-2 py-1.5 ${scoreColor(Number(row.info_score))}`}
                     >
                       {Math.round(Number(row.info_score))}
+                    </td>
+                    <td
+                      className={`px-2 py-1.5 ${scoreColor(Number(row.odds_responsiveness_score ?? 0))}`}
+                    >
+                      {Math.round(Number(row.odds_responsiveness_score ?? 0))}
+                    </td>
+                    <td
+                      className={`px-2 py-1.5 ${scoreColor(Number(row.venue_stability_score ?? 0))}`}
+                    >
+                      {Math.round(Number(row.venue_stability_score ?? 0))}
+                    </td>
+                    <td
+                      className={`px-2 py-1.5 ${scoreColor(Number(row.between_match_vol_score ?? 0))}`}
+                    >
+                      {Math.round(Number(row.between_match_vol_score ?? 0))}
                     </td>
                     <td className="px-2 py-1.5 text-foreground">
                       {row.avg_match_move_pct.toFixed(2)}

@@ -1,11 +1,11 @@
 /**
- * MeasureMe v2 — Parameter Grid Search
+ * MeasureMe v3 — Parameter Grid Search with Odds Blend
  *
- * Runs 260 (K × decay × zeroPoint) configs against real match + odds data.
- * Slope is fixed (cancels in % returns) — only affects $ display on frontend.
- * Scores each with 7 objective indices. ALL indices use percentage PRICE returns.
+ * Runs 51 configs: 50 (K × decay × prematchWeight) + 1 drift baseline.
+ * ZeroPoint fixed at 800; slope fixed at 5 (cancels in % returns).
+ * Scores each with 10 objective indices. ALL indices use percentage PRICE returns.
  *
- * Optimized: 52 Elo replays (K × decay), then 5 price conversions (zeroPoint).
+ * Optimized: 10 Elo replays (K × decay), then 5 price conversions (prematchWeight).
  *
  * Usage:  cd scheduler && npm run measureme
  */
@@ -13,6 +13,14 @@ import "dotenv/config";
 import { getSupabase, upsertBatched } from "../api/supabase-client.js";
 import { log } from "../logger.js";
 import { INITIAL_ELO } from "../config.js";
+import {
+  calibrateHomeAdvantage,
+  normalizeOdds,
+  oddsImpliedStrength,
+  findNextMatch,
+  getLatestOddsForFixture,
+} from "../services/odds-blend.js";
+import type { DriftSnapshot } from "../types.js";
 
 // ─── Legacy Elo name map (API-Football name → Legacy JSON name) ───
 const LEGACY_NAME_MAP: Record<string, string> = {
@@ -80,7 +88,7 @@ const LEGACY_NAME_MAP: Record<string, string> = {
   "Real Sociedad": "Real Sociedad de Fútbol",
   Rennes: "Stade Rennais FC 1901",
   Sassuolo: "US Sassuolo Calcio",
-  Sevilla: "Sevilla FC",
+  Sevilla: "Sevilla CF",
   Strasbourg: "RC Strasbourg Alsace",
   Sunderland: "Sunderland AFC",
   Torino: "Torino FC",
@@ -99,14 +107,20 @@ const LEGACY_URL =
   "https://raw.githubusercontent.com/frertommy/MSI/main/data/msi_daily.json";
 
 // ─── Parameter Grid ──────────────────────────────────────────
-const DEFAULT_SLOPE = 5; // slope cancels in % returns — only affects $ display
-const KS = [20, 25, 28, 30, 32, 35, 38, 40, 42, 45, 48, 50, 55];
-const DECAYS = [0.001, 0.0015, 0.002, 0.003];
-const ZERO_POINTS = [800, 850, 900, 950, 1000];
+const DEFAULT_SLOPE = 5;
+const KS = [15, 20, 25, 30, 35];
+const DECAYS = [0.001, 0.002];
+const ZERO_POINTS = [800];
+const PREMATCH_WEIGHTS = [0.0, 0.20, 0.30, 0.40, 0.50];
 const MA_WINDOW = 45;
-const ELO_REPLAYS = KS.length * DECAYS.length; // 52
-const PRICE_COMBOS = ZERO_POINTS.length; // 5
-const TOTAL = ELO_REPLAYS * PRICE_COMBOS; // 260
+const ELO_REPLAYS = KS.length * DECAYS.length; // 10
+const PRICE_COMBOS = PREMATCH_WEIGHTS.length;   // 5
+const TOTAL = ELO_REPLAYS * PRICE_COMBOS + 1;   // 51
+
+// ─── Drift baseline constants (legacy, for comparison only) ───
+const DRIFT_SCALE_LEGACY = 400;
+const DRIFT_MIN_HOURS_LEGACY = 12;
+const DRIFT_FADE_DAYS_LEGACY = 7;
 
 // ─── Types ───────────────────────────────────────────────────
 interface MatchRow {
@@ -142,7 +156,7 @@ interface MatchEvent {
   dateIdx: number;
   team: string;
   surprise: number;
-  actualScore: number; // 1=win, 0.5=draw, 0=loss
+  actualScore: number;
 }
 
 interface SharedData {
@@ -153,10 +167,12 @@ interface SharedData {
   dates: string[];
   teamStartingEloTier: Map<string, "top" | "mid" | "bot">;
   teamPoints: Map<string, number>;
+  matches: MatchRow[];
+  homeAdv: number;
+  teamMatchDateIdxs: Map<string, Set<number>>;
 }
 
 interface EloReplayResult {
-  // dailyElos[team][0] = starting Elo, [i+1] = end of dates[i]
   dailyElos: Map<string, number[]>;
   matchEvents: MatchEvent[];
 }
@@ -166,6 +182,7 @@ interface ConfigResult {
   k: number;
   decay: number;
   zeroPoint: number;
+  prematchWeight: number;
   composite: number;
   surpriseR2: number;
   driftNeutrality: number;
@@ -174,6 +191,12 @@ interface ConfigResult {
   volUniformityRatio: number;
   meanRevSharpe: number;
   infoRatio: number;
+  oddsResponsiveness: number;
+  oddsResponsivenessScore: number;
+  venueStability: number;
+  venueStabilityScore: number;
+  betweenMatchVol: number;
+  betweenMatchVolScore: number;
   surpriseR2Score: number;
   driftScore: number;
   floorHitScore: number;
@@ -202,6 +225,10 @@ function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(a: string, b: string): number {
+  return (new Date(b).getTime() - new Date(a).getTime()) / 86400000;
 }
 
 function eloExpected(ratingA: number, ratingB: number): number {
@@ -244,12 +271,7 @@ async function loadClosingOdds(
   fixtureIds: number[]
 ): Promise<Map<number, NormOdds>> {
   const sb = getSupabase();
-  // Strategy: query closest dbk first (0 = match day), then 1, 2, 3 for remaining
-  // This avoids Supabase 1000-row default limit issues with lte() range queries
-  const rawSnaps = new Map<
-    number,
-    { hp: number; dp: number; ap: number }[]
-  >();
+  const rawSnaps = new Map<number, { hp: number; dp: number; ap: number }[]>();
   const foundFixtures = new Set<number>();
 
   for (const dbk of [0, 1, 2, 3]) {
@@ -294,7 +316,6 @@ async function loadClosingOdds(
     log.info(`  dbk=${dbk}: ${foundFixtures.size} fixtures found so far`);
   }
 
-  // Average bookmaker probabilities per fixture, normalized
   const result = new Map<number, NormOdds>();
   for (const [fid, snaps] of rawSnaps) {
     const meanH = snaps.reduce((a, s) => a + s.hp, 0) / snaps.length;
@@ -310,9 +331,60 @@ async function loadClosingOdds(
   }
 
   log.info(
-    `  Closing odds: ${result.size} / ${fixtureIds.length} fixtures (closest snapshot ≤3 days)`
+    `  Closing odds: ${result.size} / ${fixtureIds.length} fixtures`
   );
   return result;
+}
+
+async function loadFullOddsCache(
+  fixtureIds: number[]
+): Promise<Map<number, DriftSnapshot[]>> {
+  const sb = getSupabase();
+  const cache = new Map<number, DriftSnapshot[]>();
+  const BATCH = 30;
+  const PAGE = 1000;
+
+  for (let i = 0; i < fixtureIds.length; i += BATCH) {
+    const batch = fixtureIds.slice(i, i + BATCH);
+    let from = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from("odds_snapshots")
+        .select(
+          "fixture_id, bookmaker, home_odds, away_odds, draw_odds, snapshot_time"
+        )
+        .in("fixture_id", batch)
+        .range(from, from + PAGE - 1);
+
+      if (error) {
+        log.error(`odds cache error (offset ${from}):`, error.message);
+        break;
+      }
+      if (!data || data.length === 0) break;
+
+      for (const row of data as DriftSnapshot[]) {
+        if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+        if (row.home_odds <= 1 || row.away_odds <= 1 || row.draw_odds <= 1)
+          continue;
+        const fid = row.fixture_id;
+        if (!cache.has(fid)) cache.set(fid, []);
+        cache.get(fid)!.push(row);
+      }
+
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+  }
+
+  for (const snaps of cache.values()) {
+    snaps.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
+  }
+
+  const totalSnaps = [...cache.values()].reduce((a, b) => a + b.length, 0);
+  log.info(
+    `  Full odds cache: ${cache.size} fixtures (${totalSnaps} snapshots)`
+  );
+  return cache;
 }
 
 async function loadLegacyElos(): Promise<Map<string, number>> {
@@ -377,6 +449,71 @@ async function loadXgData(): Promise<Map<number, XgInfo>> {
   return map;
 }
 
+// ─── Drift signal (legacy, for baseline comparison only) ─────
+function computeDriftForDate(
+  date: string,
+  matches: MatchRow[],
+  driftOdds: Map<number, DriftSnapshot[]>
+): Map<string, number> {
+  const driftMap = new Map<string, number>();
+  const cutoff = addDays(date, 14);
+
+  const upcoming = matches.filter((m) => m.date > date && m.date <= cutoff);
+
+  for (const match of upcoming) {
+    const snapshots = driftOdds.get(match.fixture_id);
+    if (!snapshots || snapshots.length < 2) continue;
+
+    const available = snapshots.filter(
+      (s) => s.snapshot_time.slice(0, 10) <= date
+    );
+    if (available.length < 2) continue;
+
+    const pinnacle = available.filter((s) => s.bookmaker === "pinnacle");
+    const selected = pinnacle.length >= 2 ? pinnacle : available;
+
+    selected.sort((a, b) => a.snapshot_time.localeCompare(b.snapshot_time));
+
+    const earliest = selected[0];
+    const latest = selected[selected.length - 1];
+
+    const hoursDiff =
+      (new Date(latest.snapshot_time).getTime() -
+        new Date(earliest.snapshot_time).getTime()) /
+      3600000;
+    if (hoursDiff < DRIFT_MIN_HOURS_LEGACY) continue;
+
+    const dBefore = daysBetween(date, match.date);
+    const weight = Math.max(
+      0,
+      Math.min(1, (dBefore - 1) / DRIFT_FADE_DAYS_LEGACY)
+    );
+    if (weight <= 0) continue;
+
+    if (earliest.home_odds > 0 && latest.home_odds > 0) {
+      const earlyProb = 1 / earliest.home_odds;
+      const lateProb = 1 / latest.home_odds;
+      const homeDrift = DRIFT_SCALE_LEGACY * (lateProb - earlyProb) * weight;
+      driftMap.set(
+        match.home_team,
+        (driftMap.get(match.home_team) ?? 0) + homeDrift
+      );
+    }
+
+    if (earliest.away_odds > 0 && latest.away_odds > 0) {
+      const earlyProb = 1 / earliest.away_odds;
+      const lateProb = 1 / latest.away_odds;
+      const awayDrift = DRIFT_SCALE_LEGACY * (lateProb - earlyProb) * weight;
+      driftMap.set(
+        match.away_team,
+        (driftMap.get(match.away_team) ?? 0) + awayDrift
+      );
+    }
+  }
+
+  return driftMap;
+}
+
 // ─── xG shock multiplier (same as pricing-engine.ts) ─────────
 const XG_FLOOR = 0.4;
 const XG_CEILING = 1.8;
@@ -405,7 +542,7 @@ function precompute(
   }
   const allTeams = [...teamLeague.keys()].sort();
 
-  // Starting Elos: look up API-Football name → legacy name → rating
+  // Starting Elos
   const startingElos = new Map<string, number>();
   for (const t of allTeams) {
     const legacyName = LEGACY_NAME_MAP[t] || t;
@@ -431,7 +568,6 @@ function precompute(
       xg,
     });
 
-    // League points (3W + 1D)
     const hp = sc[0] > sc[1] ? 3 : sc[0] === sc[1] ? 1 : 0;
     const ap = sc[1] > sc[0] ? 3 : sc[0] === sc[1] ? 1 : 0;
     teamPoints.set(m.home_team, (teamPoints.get(m.home_team) ?? 0) + hp);
@@ -449,7 +585,11 @@ function precompute(
     d = addDays(d, 1);
   }
 
-  // Tier teams by starting Elo (top 25%, mid 50%, bottom 25%)
+  // Date index map
+  const dateIdxMap = new Map<string, number>();
+  for (let i = 0; i < dates.length; i++) dateIdxMap.set(dates[i], i);
+
+  // Tier teams by starting Elo
   const sortedByElo = allTeams
     .map((t) => ({ team: t, elo: startingElos.get(t)! }))
     .sort((a, b) => b.elo - a.elo);
@@ -461,6 +601,21 @@ function precompute(
     teamStartingEloTier.set(sortedByElo[i].team, tier);
   }
 
+  // Home advantage
+  const homeAdv = calibrateHomeAdvantage(matches);
+
+  // Team match day indices
+  const teamMatchDateIdxs = new Map<string, Set<number>>();
+  for (const t of allTeams) teamMatchDateIdxs.set(t, new Set());
+  for (const [dateStr, matchList] of matchesByDate) {
+    const idx = dateIdxMap.get(dateStr);
+    if (idx === undefined) continue;
+    for (const m of matchList) {
+      teamMatchDateIdxs.get(m.homeTeam)?.add(idx);
+      teamMatchDateIdxs.get(m.awayTeam)?.add(idx);
+    }
+  }
+
   return {
     allTeams,
     teamLeague,
@@ -469,6 +624,9 @@ function precompute(
     dates,
     teamStartingEloTier,
     teamPoints,
+    matches,
+    homeAdv,
+    teamMatchDateIdxs,
   };
 }
 
@@ -484,7 +642,6 @@ function replayElos(
   const eloHistory = new Map<string, number[]>();
   const lastMatchDate = new Map<string, string>();
 
-  // dailyElos[team][0] = starting Elo (before first date)
   const dailyElos = new Map<string, number[]>();
   for (const t of allTeams) {
     const e = startingElos.get(t)!;
@@ -532,7 +689,6 @@ function replayElos(
         m.homeGoals > m.awayGoals ? 1 : m.homeGoals === m.awayGoals ? 0.5 : 0;
       const awayActual = 1 - homeActual;
 
-      // Expected score: from closing odds if available, else Elo-derived
       let homeExpected: number;
       let awayExpected: number;
       if (m.odds) {
@@ -546,7 +702,6 @@ function replayElos(
       let homeShock = K * (homeActual - homeExpected);
       let awayShock = K * (awayActual - awayExpected);
 
-      // xG multiplier: amplify dominant wins, dampen lucky wins
       if (m.xg) {
         const goalDiff = m.homeGoals - m.awayGoals;
         homeShock *= xgMultiplier(m.xg.homeXg, m.xg.awayXg, goalDiff);
@@ -559,7 +714,6 @@ function replayElos(
       lastMatchDate.set(m.homeTeam, date);
       lastMatchDate.set(m.awayTeam, date);
 
-      // Record events
       matchEvents.push({
         dateIdx,
         team: m.homeTeam,
@@ -594,29 +748,128 @@ function replayElos(
   return { dailyElos, matchEvents };
 }
 
-// ─── Price conversion + all 7 indices ────────────────────────
+// ─── Pre-compute daily odds-implied strength per replay ──────
+function computeDailyOddsImplied(
+  replay: EloReplayResult,
+  shared: SharedData,
+  oddsCache: Map<number, DriftSnapshot[]>
+): {
+  dailyOddsImplied: Map<string, (number | null)[]>;
+  dailyNextFixtureId: Map<string, (number | null)[]>;
+} {
+  const { allTeams, dates, matches, homeAdv } = shared;
+  const { dailyElos } = replay;
+
+  const dailyOddsImplied = new Map<string, (number | null)[]>();
+  const dailyNextFixtureId = new Map<string, (number | null)[]>();
+
+  for (const team of allTeams) {
+    const implied: (number | null)[] = [];
+    const nextFix: (number | null)[] = [];
+    const elos = dailyElos.get(team)!;
+
+    for (let dateIdx = 0; dateIdx < dates.length; dateIdx++) {
+      const date = dates[dateIdx];
+
+      const nextMatch = findNextMatch(team, date, matches, 14);
+      if (nextMatch) {
+        nextFix.push(nextMatch.fixture_id);
+
+        const odds = getLatestOddsForFixture(
+          nextMatch.fixture_id,
+          date,
+          oddsCache
+        );
+        if (
+          odds &&
+          odds.homeOdds > 0 &&
+          odds.drawOdds > 0 &&
+          odds.awayOdds > 0
+        ) {
+          const { homeProb, drawProb, awayProb } = normalizeOdds(
+            odds.homeOdds,
+            odds.drawOdds,
+            odds.awayOdds
+          );
+          const isHome = nextMatch.home_team === team;
+          const teamES = isHome
+            ? homeProb + drawProb * 0.5
+            : awayProb + drawProb * 0.5;
+          const opponent = isHome
+            ? nextMatch.away_team
+            : nextMatch.home_team;
+          // Use opponent's matchElo (not blended)
+          const oppElo = elos[dateIdx + 1] !== undefined
+            ? (dailyElos.get(opponent)?.[dateIdx + 1] ?? INITIAL_ELO)
+            : INITIAL_ELO;
+
+          implied.push(
+            oddsImpliedStrength(teamES, oppElo, isHome, homeAdv)
+          );
+        } else {
+          implied.push(null);
+        }
+      } else {
+        nextFix.push(null);
+        implied.push(null);
+      }
+    }
+
+    dailyOddsImplied.set(team, implied);
+    dailyNextFixtureId.set(team, nextFix);
+  }
+
+  return { dailyOddsImplied, dailyNextFixtureId };
+}
+
+// ─── Price conversion + all 10 indices ───────────────────────
 function computeForPriceParams(
   replay: EloReplayResult,
   shared: SharedData,
   slope: number,
-  zeroPoint: number
+  zeroPoint: number,
+  prematchWeight: number,
+  dailyOddsImplied: Map<string, (number | null)[]>,
+  dailyNextFixtureId: Map<string, (number | null)[]>,
+  driftMaps?: Map<string, number>[]
 ): ConfigResult {
-  const { allTeams, dates, teamStartingEloTier, teamLeague, teamPoints } =
+  const { allTeams, dates, teamStartingEloTier, teamLeague, teamPoints, teamMatchDateIdxs } =
     shared;
   const { dailyElos, matchEvents } = replay;
 
-  // Convert Elos → prices and compute daily returns per team
+  // Convert Elos → prices, applying blend or drift
   const teamDailyPrices = new Map<string, number[]>();
   const teamDailyReturns = new Map<string, number[]>();
 
   for (const team of allTeams) {
     const elos = dailyElos.get(team)!;
+    const oddsArr = dailyOddsImplied.get(team) ?? [];
     const prices: number[] = new Array(elos.length);
     const returns: number[] = new Array(elos.length - 1);
 
     for (let i = 0; i < elos.length; i++) {
-      prices[i] = linearPrice(elos[i], slope, zeroPoint);
+      let eloForPricing = elos[i];
+
+      if (i > 0) {
+        const dateIdx = i - 1;
+
+        if (driftMaps) {
+          // Drift baseline: add legacy drift
+          const drift = driftMaps[dateIdx]?.get(team) ?? 0;
+          eloForPricing = elos[i] + drift;
+        } else if (prematchWeight > 0) {
+          // Odds blend
+          const impl = oddsArr[dateIdx] ?? null;
+          if (impl !== null) {
+            eloForPricing =
+              (1 - prematchWeight) * elos[i] + prematchWeight * impl;
+          }
+        }
+      }
+
+      prices[i] = linearPrice(eloForPricing, slope, zeroPoint);
     }
+
     for (let i = 0; i < returns.length; i++) {
       returns[i] =
         prices[i] > 0 ? (prices[i + 1] - prices[i]) / prices[i] : 0;
@@ -626,16 +879,15 @@ function computeForPriceParams(
     teamDailyReturns.set(team, returns);
   }
 
-  // ── Index 1: Surprise-Response R² (25%) ─────────────
-  // Skip day 1 (dateIdx === 0) — re-centering creates artificial moves
+  // ── Index 1: Surprise-Response R² (20%) ─────────────
   const surprises: number[] = [];
   const priceMoves: number[] = [];
 
   for (const event of matchEvents) {
-    if (event.dateIdx === 0) continue; // skip day 1
+    if (event.dateIdx === 0) continue;
     const prices = teamDailyPrices.get(event.team)!;
-    const priceBefore = prices[event.dateIdx]; // prev day close
-    const priceAfter = prices[event.dateIdx + 1]; // this day close
+    const priceBefore = prices[event.dateIdx];
+    const priceAfter = prices[event.dateIdx + 1];
     if (priceBefore <= 0) continue;
     surprises.push(event.surprise);
     priceMoves.push(Math.abs(priceAfter - priceBefore) / priceBefore);
@@ -661,19 +913,18 @@ function computeForPriceParams(
     avgMatchMove = meanY * 100;
   }
 
-  // ── Index 2: Drift Neutrality (15%) ─────────────────
+  // ── Index 2: Drift Neutrality (8%) ─────────────────
   let totalReturn = 0;
   let returnCount = 0;
   for (const returns of teamDailyReturns.values()) {
     for (let ri = 1; ri < returns.length; ri++) {
-      // skip returns[0] (day 1)
       totalReturn += returns[ri];
       returnCount++;
     }
   }
   const meanDailyReturn = returnCount > 0 ? totalReturn / returnCount : 0;
 
-  // ── Index 3: Floor Hit % (15%) ──────────────────────
+  // ── Index 3: Floor Hit % (5%) ──────────────────────
   let floorCount = 0;
   let totalObs = 0;
   let teamsAtFloor = 0;
@@ -681,7 +932,6 @@ function computeForPriceParams(
     const prices = teamDailyPrices.get(team)!;
     let teamHitFloor = false;
     for (let i = 2; i < prices.length; i++) {
-      // skip prices[1] (end of day 1)
       totalObs++;
       if (prices[i] <= 10.001) {
         floorCount++;
@@ -692,10 +942,10 @@ function computeForPriceParams(
   }
   const floorHitPct = totalObs > 0 ? (floorCount / totalObs) * 100 : 0;
 
-  // ── Index 4: Return Kurtosis (10%) ──────────────────
+  // ── Index 4: Return Kurtosis (5%) ──────────────────
   const allReturns: number[] = [];
   for (const returns of teamDailyReturns.values()) {
-    for (let ri = 1; ri < returns.length; ri++) allReturns.push(returns[ri]); // skip day 1
+    for (let ri = 1; ri < returns.length; ri++) allReturns.push(returns[ri]);
   }
   let kurtosis = 3;
   if (allReturns.length >= 20) {
@@ -704,21 +954,21 @@ function computeForPriceParams(
     let m2 = 0,
       m4 = 0;
     for (const r of allReturns) {
-      const d = r - mean;
-      m2 += d * d;
-      m4 += d * d * d * d;
+      const dd = r - mean;
+      m2 += dd * dd;
+      m4 += dd * dd * dd * dd;
     }
     m2 /= n;
     m4 /= n;
     kurtosis = m2 > 0 ? m4 / (m2 * m2) : 3;
   }
 
-  // ── Index 5: Vol Uniformity (10%) ───────────────────
+  // ── Index 5: Vol Uniformity (5%) ───────────────────
   const tierVols: Record<string, number[]> = { top: [], mid: [], bot: [] };
   for (const team of allTeams) {
     const tier = teamStartingEloTier.get(team) ?? "mid";
     const allRet = teamDailyReturns.get(team)!;
-    const returns = allRet.slice(1); // skip day 1
+    const returns = allRet.slice(1);
     if (returns.length < 10) continue;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance =
@@ -739,10 +989,9 @@ function computeForPriceParams(
       : 1;
 
   // ── Index 6: Mean-Reversion Sharpe (15%) ────────────
-  // Strategy: long 3 days after loss, short 3 days after win
   const teamMatchDays = new Map<string, Map<number, number>>();
   for (const event of matchEvents) {
-    if (event.dateIdx === 0) continue; // skip day 1
+    if (event.dateIdx === 0) continue;
     if (!teamMatchDays.has(event.team))
       teamMatchDays.set(event.team, new Map());
     teamMatchDays.get(event.team)!.set(event.dateIdx, event.actualScore);
@@ -756,15 +1005,12 @@ function computeForPriceParams(
     let holdDays = 0;
 
     for (let i = 1; i < returns.length; i++) {
-      // skip returns[0] (day 1)
-      // Collect P&L for existing position
       if (position !== 0) {
         dailyPnl.push(position * returns[i]);
         holdDays--;
         if (holdDays <= 0) position = 0;
       }
 
-      // Match day → set new position starting NEXT day
       const actual = matchDays.get(i);
       if (actual !== undefined) {
         if (actual === 0) {
@@ -774,7 +1020,6 @@ function computeForPriceParams(
           position = -1;
           holdDays = 3;
         }
-        // draw: no new position
       }
     }
   }
@@ -789,7 +1034,6 @@ function computeForPriceParams(
   }
 
   // ── Index 7: Information Ratio (10%) ────────────────
-  // Spearman: final PRICE rank vs actual league points rank, per league
   const leagues = new Set(teamLeague.values());
   const correlations: number[] = [];
 
@@ -817,8 +1061,8 @@ function computeForPriceParams(
 
     let dSq = 0;
     for (const t of teams) {
-      const d = (priceRank.get(t) ?? 0) - (ptsRank.get(t) ?? 0);
-      dSq += d * d;
+      const dd = (priceRank.get(t) ?? 0) - (ptsRank.get(t) ?? 0);
+      dSq += dd * dd;
     }
     const n = teams.length;
     const rho = 1 - (6 * dSq) / (n * (n * n - 1));
@@ -830,11 +1074,118 @@ function computeForPriceParams(
       ? correlations.reduce((a, b) => a + b, 0) / correlations.length
       : 0;
 
+  // ── Index 8: Odds Responsiveness (15%) ──────────────
+  // On non-match days where odds shifted (>5 Elo ≈ 1% prob), measure
+  // correlation(Δ oddsImpliedStrength, Δ price)
+  const oddsRespX: number[] = [];
+  const oddsRespY: number[] = [];
+  for (const team of allTeams) {
+    const oddsArr = dailyOddsImplied.get(team) ?? [];
+    const teamReturns = teamDailyReturns.get(team)!;
+    const matchDays = teamMatchDateIdxs.get(team)!;
+
+    for (let dateIdx = 1; dateIdx < dates.length; dateIdx++) {
+      if (matchDays.has(dateIdx)) continue;
+      if (dateIdx >= teamReturns.length) continue;
+
+      const implToday = oddsArr[dateIdx] ?? null;
+      const implYesterday = oddsArr[dateIdx - 1] ?? null;
+      if (implToday === null || implYesterday === null) continue;
+
+      const deltaImpl = implToday - implYesterday;
+      if (Math.abs(deltaImpl) < 5) continue;
+
+      oddsRespX.push(deltaImpl);
+      oddsRespY.push(teamReturns[dateIdx] * 100);
+    }
+  }
+
+  let oddsResp = 0;
+  if (oddsRespX.length >= 20) {
+    const n = oddsRespX.length;
+    const meanX = oddsRespX.reduce((a, b) => a + b, 0) / n;
+    const meanY = oddsRespY.reduce((a, b) => a + b, 0) / n;
+    let ssXY = 0,
+      ssXX = 0,
+      ssYY = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = oddsRespX[i] - meanX;
+      const dy = oddsRespY[i] - meanY;
+      ssXY += dx * dy;
+      ssXX += dx * dx;
+      ssYY += dy * dy;
+    }
+    oddsResp =
+      ssXX > 0 && ssYY > 0 ? ssXY / Math.sqrt(ssXX * ssYY) : 0;
+  }
+
+  // ── Index 9: Venue Stability (10%) ──────────────────
+  // When next-fixture changes on a non-match day, measure price move ratio
+  const transitionMoves: number[] = [];
+  const nonTransNonMatchMoves: number[] = [];
+
+  for (const team of allTeams) {
+    const nextFixArr = dailyNextFixtureId.get(team) ?? [];
+    const teamReturns = teamDailyReturns.get(team)!;
+    const matchDays = teamMatchDateIdxs.get(team)!;
+
+    for (let dateIdx = 1; dateIdx < dates.length; dateIdx++) {
+      if (matchDays.has(dateIdx)) continue;
+      if (dateIdx >= teamReturns.length) continue;
+
+      const prevFix = nextFixArr[dateIdx - 1] ?? null;
+      const currFix = nextFixArr[dateIdx] ?? null;
+      if (prevFix === null || currFix === null) continue;
+
+      const absRet = Math.abs(teamReturns[dateIdx]);
+
+      if (prevFix !== currFix) {
+        transitionMoves.push(absRet);
+      } else {
+        nonTransNonMatchMoves.push(absRet);
+      }
+    }
+  }
+
+  let venueRatio = 1.0;
+  if (transitionMoves.length >= 5 && nonTransNonMatchMoves.length >= 5) {
+    const meanTrans =
+      transitionMoves.reduce((a, b) => a + b, 0) / transitionMoves.length;
+    const meanNonTrans =
+      nonTransNonMatchMoves.reduce((a, b) => a + b, 0) /
+      nonTransNonMatchMoves.length;
+    venueRatio = meanNonTrans > 1e-10 ? meanTrans / meanNonTrans : 1.0;
+  }
+
+  // ── Index 10: Between-Match Vol (7%) ────────────────
+  // Non-match-day annualized vol
+  const nonMatchReturns: number[] = [];
+  for (const team of allTeams) {
+    const teamReturns = teamDailyReturns.get(team)!;
+    const matchDays = teamMatchDateIdxs.get(team)!;
+
+    for (let dateIdx = 1; dateIdx < dates.length; dateIdx++) {
+      if (matchDays.has(dateIdx)) continue;
+      if (dateIdx >= teamReturns.length) continue;
+      nonMatchReturns.push(teamReturns[dateIdx]);
+    }
+  }
+
+  let betweenMatchAnnVol = 0;
+  if (nonMatchReturns.length >= 30) {
+    const mean =
+      nonMatchReturns.reduce((a, b) => a + b, 0) / nonMatchReturns.length;
+    const variance =
+      nonMatchReturns.reduce((a, r) => a + (r - mean) ** 2, 0) /
+      nonMatchReturns.length;
+    betweenMatchAnnVol = Math.sqrt(variance) * Math.sqrt(365) * 100;
+  }
+
   // ── Avg Annual Vol ──────────────────────────────────
   const vols: number[] = [];
   for (const team of allTeams) {
     const allRet2 = teamDailyReturns.get(team)!;
-    const returns = allRet2.slice(1); // skip day 1
+    const returns = allRet2.slice(1);
     if (returns.length < 10) continue;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance =
@@ -844,37 +1195,39 @@ function computeForPriceParams(
   const avgAnnualVol =
     vols.length > 0 ? vols.reduce((a, b) => a + b, 0) / vols.length : 0;
 
-  // ── Scoring (continuous — no step functions) ────────
-  // R²: 0→0, 0.7→100
+  // ── Scoring ─────────────────────────────────────────
+  // Weights: R²=20%, Drift=8%, Floor=5%, Kurt=5%, VolUni=5%,
+  //          MR=15%, Info=10%, OddsResp=15%, VenueStab=10%, BetweenVol=7%
   const s1 = Math.min(100, r2 * 143);
-  // Drift: 0→100, ±0.001→0
   const s2 = Math.max(0, 100 * (1 - Math.abs(meanDailyReturn) / 0.001));
-  // Floor hit: 0%→100, 10%→0
   const s3 = Math.max(0, 100 * (1 - floorHitPct / 10));
-  // Kurtosis: peak at 7, ±20→0
   const s4 = Math.max(0, 100 - Math.abs(kurtosis - 7) * 5);
-  // Vol uniformity: 1.0×→100, 3.0×→0
   const s5 = Math.max(0, 100 * (1 - (volRatio - 1.0) / 2.0));
-  // MR Sharpe: 0→100, ±0.8→0
   const s6 = Math.max(0, 100 * (1 - Math.abs(mrSharpe) / 0.8));
-  // Info ratio: 0→0, ~0.91→100
   const s7 = Math.min(100, Math.max(0, infoRatio * 110));
+  const s8 = Math.min(100, Math.max(0, oddsResp * 125));
+  const s9 = Math.max(0, 100 - Math.abs(venueRatio - 1.0) * 50);
+  const s10 = Math.min(100, betweenMatchAnnVol * 5);
 
   const composite = round4(
-    s1 * 0.25 +
-      s2 * 0.15 +
-      s3 * 0.15 +
-      s4 * 0.1 +
-      s5 * 0.1 +
+    s1 * 0.20 +
+      s2 * 0.08 +
+      s3 * 0.05 +
+      s4 * 0.05 +
+      s5 * 0.05 +
       s6 * 0.15 +
-      s7 * 0.1
+      s7 * 0.10 +
+      s8 * 0.15 +
+      s9 * 0.10 +
+      s10 * 0.07
   );
 
   return {
     slope,
-    k: 0, // set by caller
-    decay: 0, // set by caller
+    k: 0,
+    decay: 0,
     zeroPoint,
+    prematchWeight: 0,
     composite,
     surpriseR2: r2,
     driftNeutrality: meanDailyReturn,
@@ -883,6 +1236,12 @@ function computeForPriceParams(
     volUniformityRatio: volRatio,
     meanRevSharpe: mrSharpe,
     infoRatio,
+    oddsResponsiveness: oddsResp,
+    oddsResponsivenessScore: round4(s8),
+    venueStability: venueRatio,
+    venueStabilityScore: round4(s9),
+    betweenMatchVol: betweenMatchAnnVol,
+    betweenMatchVolScore: round4(s10),
     surpriseR2Score: round4(s1),
     driftScore: round4(s2),
     floorHitScore: round4(s3),
@@ -903,10 +1262,10 @@ async function main() {
   const t0 = Date.now();
   const runId = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
-  log.info("═══ MeasureMe v2 Grid Search ═══");
+  log.info("═══ MeasureMe v3 Grid Search (Odds Blend) ═══");
   log.info(`Run ID: ${runId}`);
   log.info(
-    `Grid: ${ELO_REPLAYS} Elo replays × ${PRICE_COMBOS} price combos = ${TOTAL} configs`
+    `Grid: ${ELO_REPLAYS} Elo replays × ${PRICE_COMBOS} prematch weights = ${ELO_REPLAYS * PRICE_COMBOS} + 1 drift baseline = ${TOTAL} configs`
   );
   log.info("");
 
@@ -920,7 +1279,10 @@ async function main() {
   log.info(`  Matches: ${matches.length} completed`);
 
   const fixtureIds = [...new Set(matches.map((m) => m.fixture_id))];
-  const oddsMap = await loadClosingOdds(fixtureIds);
+  const [oddsMap, oddsCache] = await Promise.all([
+    loadClosingOdds(fixtureIds),
+    loadFullOddsCache(fixtureIds),
+  ]);
 
   // Phase 2: Precompute
   log.info("Phase 2: Precomputing...");
@@ -929,6 +1291,7 @@ async function main() {
   log.info(
     `  Dates: ${shared.dates[0]} → ${shared.dates[shared.dates.length - 1]} (${shared.dates.length} days)`
   );
+  log.info(`  Home advantage: ${shared.homeAdv.toFixed(1)} Elo points`);
   log.info("");
 
   // Phase 3: Grid search
@@ -936,25 +1299,44 @@ async function main() {
   const results: ConfigResult[] = [];
   let replayNum = 0;
 
+  let savedReplayK20D001: EloReplayResult | null = null;
+  let savedOddsInfoK20D001: {
+    dailyOddsImplied: Map<string, (number | null)[]>;
+    dailyNextFixtureId: Map<string, (number | null)[]>;
+  } | null = null;
+
   for (const K of KS) {
     for (const decay of DECAYS) {
       replayNum++;
       const rt0 = Date.now();
 
-      // Run Elo replay once for this (K, decay) pair
       const replay = replayElos(shared, K, decay);
       const replayMs = Date.now() - rt0;
 
-      // Convert to prices for each zeroPoint (slope is fixed — cancels in % returns)
-      for (const zeroPoint of ZERO_POINTS) {
+      // Pre-compute odds-implied strengths for this replay
+      const ot0 = Date.now();
+      const oddsInfo = computeDailyOddsImplied(replay, shared, oddsCache);
+      const oddsMs = Date.now() - ot0;
+
+      // Save K=20 decay=0.001 for drift baseline
+      if (K === 20 && decay === 0.001) {
+        savedReplayK20D001 = replay;
+        savedOddsInfoK20D001 = oddsInfo;
+      }
+
+      for (const pw of PREMATCH_WEIGHTS) {
         const result = computeForPriceParams(
           replay,
           shared,
           DEFAULT_SLOPE,
-          zeroPoint
+          ZERO_POINTS[0],
+          pw,
+          oddsInfo.dailyOddsImplied,
+          oddsInfo.dailyNextFixtureId
         );
         result.k = K;
         result.decay = decay;
+        result.prematchWeight = pw;
         results.push(result);
       }
 
@@ -963,9 +1345,35 @@ async function main() {
         a.composite > b.composite ? a : b
       );
       log.info(
-        `  [${replayNum}/${ELO_REPLAYS}] K=${K} decay=${decay} (${replayMs}ms) → best: ${bestSoFar.composite}  (${elapsed}s)`
+        `  [${replayNum}/${ELO_REPLAYS}] K=${K} decay=${decay} (replay ${replayMs}ms, odds ${oddsMs}ms) → best: ${bestSoFar.composite}  (${elapsed}s)`
       );
     }
+  }
+
+  // Drift baseline: K=20 decay=0.001 + legacy drift signal
+  if (savedReplayK20D001 && savedOddsInfoK20D001) {
+    log.info("  Computing drift baseline (K=20 decay=0.001 + legacy drift)...");
+    const dt0 = Date.now();
+    const driftMaps: Map<string, number>[] = [];
+    for (const date of shared.dates) {
+      driftMaps.push(computeDriftForDate(date, shared.matches, oddsCache));
+    }
+
+    const driftResult = computeForPriceParams(
+      savedReplayK20D001,
+      shared,
+      DEFAULT_SLOPE,
+      ZERO_POINTS[0],
+      0,
+      savedOddsInfoK20D001.dailyOddsImplied,
+      savedOddsInfoK20D001.dailyNextFixtureId,
+      driftMaps
+    );
+    driftResult.k = 20;
+    driftResult.decay = 0.001;
+    driftResult.prematchWeight = -1; // marker for drift baseline
+    results.push(driftResult);
+    log.info(`  Drift baseline: ${driftResult.composite} (${Date.now() - dt0}ms)`);
   }
 
   // Sort by composite
@@ -975,16 +1383,32 @@ async function main() {
   log.info("TOP 10:");
   for (let i = 0; i < Math.min(10, results.length); i++) {
     const r = results[i];
+    const pwLabel = r.prematchWeight === -1 ? "DRIFT" : `pw=${r.prematchWeight}`;
     log.info(
-      `  #${i + 1}  K=${r.k} decay=${r.decay} zp=${r.zeroPoint} → score ${r.composite}`
+      `  #${i + 1}  K=${r.k} decay=${r.decay} ${pwLabel} → score ${r.composite}`
     );
+    log.info(
+      `        R²=${r.surpriseR2Score} Drift=${r.driftScore} Floor=${r.floorHitScore} Kurt=${r.kurtosisScore} Vol=${r.volUniScore} MR=${r.meanRevScore} Info=${r.infoScore} OddsR=${r.oddsResponsivenessScore} Venue=${r.venueStabilityScore} BtwnV=${r.betweenMatchVolScore}`
+    );
+  }
+
+  // Show drift baseline position
+  const driftIdx = results.findIndex((r) => r.prematchWeight === -1);
+  if (driftIdx >= 0) {
+    log.info(`\nDrift baseline rank: #${driftIdx + 1} / ${results.length} (score: ${results[driftIdx].composite})`);
+  }
+
+  // Show w=0 best
+  const bestW0 = results.find((r) => r.prematchWeight === 0.0);
+  if (bestW0) {
+    const w0Idx = results.indexOf(bestW0);
+    log.info(`Best w=0.0 rank: #${w0Idx + 1} (score: ${bestW0.composite})`);
   }
   log.info("");
 
   // Phase 4: Write to Supabase
   log.info("Phase 4: Writing results...");
 
-  // Clear old data
   const sb = getSupabase();
   const { error: delError } = await sb
     .from("measureme_results")
@@ -998,6 +1422,7 @@ async function main() {
     k_factor: r.k,
     decay: r.decay,
     zero_point: r.zeroPoint,
+    prematch_weight: r.prematchWeight,
     composite_score: r.composite,
     surprise_r2: round4(r.surpriseR2),
     drift_neutrality: round4(r.driftNeutrality),
@@ -1006,6 +1431,12 @@ async function main() {
     vol_uniformity_ratio: round4(r.volUniformityRatio),
     mean_rev_sharpe: round4(r.meanRevSharpe),
     info_ratio: round4(r.infoRatio),
+    odds_responsiveness: round4(r.oddsResponsiveness),
+    odds_responsiveness_score: r.oddsResponsivenessScore,
+    venue_stability: round4(r.venueStability),
+    venue_stability_score: r.venueStabilityScore,
+    between_match_vol: round4(r.betweenMatchVol),
+    between_match_vol_score: r.betweenMatchVolScore,
     surprise_r2_score: r.surpriseR2Score,
     drift_score: r.driftScore,
     floor_hit_score: r.floorHitScore,

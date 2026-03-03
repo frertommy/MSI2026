@@ -11,6 +11,8 @@ export interface MeasureMeRow {
   zero_point: number;
   composite_score: number;
 
+  prematch_weight: number;
+
   // Raw index values
   surprise_r2: number;
   drift_neutrality: number;
@@ -19,6 +21,9 @@ export interface MeasureMeRow {
   vol_uniformity_ratio: number;
   mean_rev_sharpe: number;
   info_ratio: number;
+  odds_responsiveness: number;
+  venue_stability: number;
+  between_match_vol: number;
 
   // Index scores (0-100)
   surprise_r2_score: number;
@@ -28,6 +33,9 @@ export interface MeasureMeRow {
   vol_uni_score: number;
   mean_rev_score: number;
   info_score: number;
+  odds_responsiveness_score: number;
+  venue_stability_score: number;
+  between_match_vol_score: number;
 
   // Summary stats
   avg_match_move_pct: number;
