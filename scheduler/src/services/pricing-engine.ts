@@ -306,12 +306,19 @@ async function fetchLegacyElos(): Promise<Map<string, number>> {
       { date: string; rating: number }[]
     >;
     const eloMap = new Map<string, number>();
+    const seasonStart = "2025-08-01";
     for (const [legacyName, entries] of Object.entries(data)) {
       if (!entries || entries.length === 0) continue;
-      const lastRating = entries[entries.length - 1].rating;
-      eloMap.set(legacyName, lastRating);
+      // Use the rating closest to but BEFORE the replay start date.
+      // Taking the latest entry (Feb 2026) would double-count every match
+      // since the oracle replays from Aug 2025 onward.
+      const preSeason = entries.filter((e) => e.date < seasonStart);
+      const startRating = preSeason.length > 0
+        ? preSeason[preSeason.length - 1].rating
+        : entries[0].rating;
+      eloMap.set(legacyName, startRating);
     }
-    log.info(`  ${eloMap.size} teams in legacy data`);
+    log.info(`  ${eloMap.size} teams in legacy data (pre-season anchor: <${seasonStart})`);
     return eloMap;
   } catch (err) {
     log.error("Legacy fetch error", err instanceof Error ? err.message : err);
