@@ -73,7 +73,9 @@ export async function refreshMatches(): Promise<{
       log.info(`  ${leagueName}: ${fixtures.length} fixtures`);
 
       for (const f of fixtures) {
-        const finished = ["FT", "AET", "PEN"].includes(f.fixture.status.short);
+        const statusCode = f.fixture.status.short;
+        const finished = ["FT", "AET", "PEN"].includes(statusCode);
+        const live = ["1H", "HT", "2H", "ET", "BT", "P"].includes(statusCode);
         const score =
           f.goals.home !== null && f.goals.away !== null
             ? `${f.goals.home}-${f.goals.away}`
@@ -86,7 +88,8 @@ export async function refreshMatches(): Promise<{
           home_team: f.teams.home.name,
           away_team: f.teams.away.name,
           score,
-          status: finished ? "finished" : "upcoming",
+          status: finished ? "finished" : live ? "live" : "upcoming",
+          status_code: statusCode,
         });
       }
     } catch (err) {

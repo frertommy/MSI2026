@@ -35,6 +35,7 @@ export interface Match {
   away_team: string;
   score: string;
   status: string;
+  status_code?: string;
 }
 
 export interface OddsRow {

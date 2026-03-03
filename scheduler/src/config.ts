@@ -49,22 +49,22 @@ export const CREDITS_DAILY_SOFT_LIMIT = 450; // reserve 50 for manual
 export const CREDITS_PER_LEAGUE_CALL = 3; // h2h + totals + spreads = 3 credits
 export const CREDITS_FALLBACK_INTERVAL = 60 * 60 * 1000; // hourly when low
 
-// ─── Pricing engine constants (mirrored from src/compute-prices.ts) ───
+// ─── Pricing engine constants (MeasureMe-validated) ──────────
 export const INITIAL_ELO = 1500;
 export const BT_ITERATIONS = 50;
 export const WINDOW_DAYS = 60;
 export const DECAY_HALF_LIFE = 14;
-export const SHOCK_HALF_LIFE = 7;
-export const SHOCK_K = 32;
-export const ORACLE_SHOCK_K = 20;
-export const ORACLE_SHOCK_HALF_LIFE = 10;
-export const PRIOR_PULL = 0.15;
-export const CARRY_DECAY = 0.005;
-export const DOLLAR_SPREAD = 220;
-export const ORACLE_WEIGHT = 0.7;
+export const PRICE_SLOPE = 5;                    // price = max(FLOOR, (elo-1000)/SLOPE)
+export const PRICE_FLOOR = 10;                   // minimum dollar price
+export const SHOCK_K = 40;                       // flat K-factor for match shocks
+export const CARRY_DECAY_RATE = 0.0015;          // daily decay rate toward 45d MA
+export const MA_WINDOW = 45;                     // moving average window for carry anchor
+export const BT_FORWARD_DAYS = 14;               // include upcoming matches in BT window
+export const FRESHNESS_HALFLIFE_HOURS = 72;       // odds staleness half-life (hours)
+export const LIVE_SHOCK_DISCOUNT = 0.5;           // discount factor for in-play shocks
 export const BATCH_SIZE = 500;
 
-// ─── Outright futures mapping ─────────────────────────────────
+// ─── Outright futures mapping (disabled but kept for odds-client) ──
 export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Premier League": "soccer_epl_winner",
   "La Liga": "soccer_spain_la_liga_winner",
@@ -72,10 +72,6 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Serie A": "soccer_italy_serie_a_winner",
   "Ligue 1": "soccer_france_ligue_one_winner",
 };
-
-// Outright blending disabled — league winner probability creates
-// season-end discontinuity incompatible with continuous perp
-export const OUTRIGHT_WEIGHT = 0;
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 // ─── EMA fast-response layer ────────────────────────────────
