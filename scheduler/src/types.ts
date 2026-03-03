@@ -94,6 +94,18 @@ export interface DriftSnapshot {
   snapshot_time: string;
 }
 
+// ─── Live price snapshot ─────────────────────────────────
+export interface LivePrice {
+  team: string;
+  league: string;
+  timestamp: string;      // ISO datetime (sub-daily)
+  model: string;
+  implied_elo: number;
+  dollar_price: number;
+  blend_mode: string;     // "live" | "prematch" | "none"
+  fixture_id: number | null;
+}
+
 // ─── Service result types ────────────────────────────────────
 export interface PollResult {
   eventsFound: number;

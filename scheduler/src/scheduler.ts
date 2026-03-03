@@ -162,9 +162,10 @@ export class Scheduler {
         }
       }
 
-      // 4. Run pricing engine (incremental after first cycle)
+      // 4. Run pricing engine (incremental after first cycle, realTime for live blend)
       const pricingResult = await runPricingEngine({
         incremental: this.cycleCount > 1,
+        realTime: true,
       });
       log.info(
         `Pricing: ${pricingResult.teamPriceRows} team_prices, ${pricingResult.matchProbRows} match_probs`

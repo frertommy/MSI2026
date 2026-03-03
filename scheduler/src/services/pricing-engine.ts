@@ -1,14 +1,17 @@
 /**
- * Pricing engine — Phase 2: Odds Blend.
+ * Pricing engine — Phase 4: Live In-Play Pricing.
  *
  * Key features:
  *   - Linear pricing: max(FLOOR, (elo-ZERO)/SLOPE)
- *   - 1/0.5/0 scoring (zero-sum), permanent shocks, flat K=20
+ *   - 1/0.5/0 scoring (zero-sum), permanent shocks, flat K=30
  *   - Carry decay toward 45-day MA anchor
  *   - xG shock multiplier (Understat)
- *   - Odds blend: between-match price movement via odds-implied Elo
+ *   - Two-state odds blend:
+ *       Live:     (1 - LIVE_WEIGHT) * matchElo + LIVE_WEIGHT * oddsImplied (current match)
+ *       Prematch: (1 - PREMATCH_WEIGHT) * matchElo + PREMATCH_WEIGHT * oddsImplied (next match)
  *   - In-memory odds cache: full load once, incremental merges after
  *   - Incremental mode: replay only from last checkpoint date
+ *   - realTime flag gates all live code paths (skip live shocks, write live_prices)
  *   - No EMA smoothing (instant price discovery)
  *   - No confidence metric (always 1)
  */
@@ -24,6 +27,7 @@ import {
   MA_WINDOW,
   LIVE_SHOCK_DISCOUNT,
   PREMATCH_WEIGHT,
+  LIVE_WEIGHT,
   XG_ENABLED,
   XG_FLOOR,
   XG_CEILING,
@@ -35,6 +39,8 @@ import {
   oddsImpliedStrength,
   findNextMatch,
   getLatestOddsForFixture,
+  findLiveMatch,
+  getCurrentMatchOdds,
 } from "./odds-blend.js";
 import type {
   Match,
@@ -42,6 +48,7 @@ import type {
   MatchProb,
   PricingResult,
   DriftSnapshot,
+  LivePrice,
 } from "../types.js";
 
 const LEGACY_NAME_MAP: Record<string, string> = {
@@ -535,14 +542,42 @@ function matchProbsFromElo(
   };
 }
 
+// ─── Live prices cleanup ─────────────────────────────────────
+let lastLivePriceCleanup = 0;
+
+async function cleanupLivePrices(): Promise<void> {
+  // Run at most once per day
+  const now = Date.now();
+  if (now - lastLivePriceCleanup < 86400000) return;
+  lastLivePriceCleanup = now;
+
+  try {
+    const sb = getSupabase();
+    const cutoff = new Date(now - 30 * 86400000).toISOString();
+    const { error } = await sb
+      .from("live_prices")
+      .delete()
+      .lt("timestamp", cutoff);
+    if (error) {
+      log.warn("live_prices cleanup error:", error.message);
+    } else {
+      log.debug("Cleaned live_prices older than 30 days");
+    }
+  } catch (err) {
+    log.warn("live_prices cleanup failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 // ─── Main Engine ─────────────────────────────────────────────
 export async function runPricingEngine(options?: {
   endDate?: string;
   incremental?: boolean;
+  realTime?: boolean;
 }): Promise<PricingResult> {
   const END_DATE = options?.endDate ?? new Date().toISOString().slice(0, 10);
   const START_DATE = "2025-08-01";
   const incremental = options?.incremental ?? false;
+  const realTime = options?.realTime ?? false;
 
   log.info(`Pricing engine: ${START_DATE} → ${END_DATE}${incremental ? " (incremental)" : ""}`);
 
@@ -591,6 +626,7 @@ export async function runPricingEngine(options?: {
 
   const teamPriceRows: TeamPrice[] = [];
   const matchProbRows: MatchProb[] = [];
+  const livePriceRows: LivePrice[] = [];
 
   const matchesByDate = new Map<string, Match[]>();
   for (const m of matches) {
@@ -628,13 +664,18 @@ export async function runPricingEngine(options?: {
       teamElo.set(team, newElo);
     }
 
-    // 2. Match shocks — permanent, 1/0.5/0 scoring, flat K, live discount
+    // 2. Match shocks — permanent, 1/0.5/0 scoring, flat K
+    //    In realTime mode, skip shocks for live matches entirely.
+    //    Shock will be applied once the match finishes (status="finished").
     const endOfDay = `${date}T23:59:59Z`;
     for (const m of todaysMatches) {
       const sc = parseScore(m.score);
       if (!sc) continue;
       const [hg, ag] = sc;
       const isLive = m.status === "live";
+
+      // realTime mode: skip partial-score shocks for live matches
+      if (realTime && isLive) continue;
 
       const homeElo = teamElo.get(m.home_team) ?? INITIAL_ELO;
       const awayElo = teamElo.get(m.away_team) ?? INITIAL_ELO;
@@ -680,7 +721,7 @@ export async function runPricingEngine(options?: {
         }
       }
 
-      // Live match discount
+      // Live match discount (replay mode only — realTime skips live matches above)
       if (isLive) {
         homeShock *= LIVE_SHOCK_DISCOUNT;
         awayShock *= LIVE_SHOCK_DISCOUNT;
@@ -714,42 +755,69 @@ export async function runPricingEngine(options?: {
     // Only generate output rows for dates we want to write
     if (date < writeFromDate) continue;
 
-    // 5. Generate prices — single oracle model with odds blend
+    // 5. Generate prices — two-state odds blend (live + prematch)
     for (const team of allTeams) {
       const league = teamLeague.get(team)!;
       const elo = teamElo.get(team) ?? INITIAL_ELO;
 
-      // Odds blend: find next match, compute odds-implied strength
       let finalElo = elo;
       let oddsImplied: number | null = null;
-      let blendActive = false;
+      let blendMode: "live" | "prematch" | "none" = "none";
+      let blendFixtureId: number | null = null;
 
-      const nextMatch = findNextMatch(team, date, matches, 14);
-      if (nextMatch) {
-        const odds = getLatestOddsForFixture(nextMatch.fixture_id, date, oddsIndex);
-        if (odds && odds.homeOdds > 0 && odds.drawOdds > 0 && odds.awayOdds > 0) {
-          const { homeProb, drawProb, awayProb } = normalizeOdds(
-            odds.homeOdds, odds.drawOdds, odds.awayOdds
+      // STATE 1: Live blend — check for live match (only when realTime)
+      if (realTime) {
+        const liveMatch = findLiveMatch(team, matches);
+        if (liveMatch) {
+          const liveOdds = getCurrentMatchOdds(
+            (liveMatch as Match).fixture_id, oddsIndex
           );
-          const isHome = nextMatch.home_team === team;
-          const teamES = isHome
-            ? homeProb + drawProb * 0.5
-            : awayProb + drawProb * 0.5;
-
-          // Use opponent's matchElo (from teamElo map), NOT blended Elo
-          const opponent = isHome ? nextMatch.away_team : nextMatch.home_team;
-          const oppElo = teamElo.get(opponent) ?? INITIAL_ELO;
-
-          oddsImplied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
-
-          // Blend — display only, NOT written back to teamElo
-          finalElo = (1 - PREMATCH_WEIGHT) * elo + PREMATCH_WEIGHT * oddsImplied;
-          blendActive = true;
+          if (liveOdds && liveOdds.homeOdds > 0 && liveOdds.drawOdds > 0 && liveOdds.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(
+              liveOdds.homeOdds, liveOdds.drawOdds, liveOdds.awayOdds
+            );
+            const isHome = liveMatch.home_team === team;
+            const teamES = isHome
+              ? homeProb + drawProb * 0.5
+              : awayProb + drawProb * 0.5;
+            const opponent = isHome ? liveMatch.away_team : liveMatch.home_team;
+            const oppElo = teamElo.get(opponent) ?? INITIAL_ELO;
+            oddsImplied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            finalElo = (1 - LIVE_WEIGHT) * elo + LIVE_WEIGHT * oddsImplied;
+            blendMode = "live";
+            blendFixtureId = (liveMatch as Match).fixture_id;
+          }
         }
       }
 
-      // Drift removed — pure matchElo when no blend active
-      const eloForPricing = blendActive ? finalElo : elo;
+      // STATE 2: Prematch blend — find next match (when not in live blend)
+      if (blendMode === "none") {
+        const nextMatch = findNextMatch(team, date, matches, 14);
+        if (nextMatch) {
+          const odds = getLatestOddsForFixture(nextMatch.fixture_id, date, oddsIndex);
+          if (odds && odds.homeOdds > 0 && odds.drawOdds > 0 && odds.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(
+              odds.homeOdds, odds.drawOdds, odds.awayOdds
+            );
+            const isHome = nextMatch.home_team === team;
+            const teamES = isHome
+              ? homeProb + drawProb * 0.5
+              : awayProb + drawProb * 0.5;
+
+            // Use opponent's matchElo (from teamElo map), NOT blended Elo
+            const opponent = isHome ? nextMatch.away_team : nextMatch.home_team;
+            const oppElo = teamElo.get(opponent) ?? INITIAL_ELO;
+
+            oddsImplied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            finalElo = (1 - PREMATCH_WEIGHT) * elo + PREMATCH_WEIGHT * oddsImplied;
+            blendMode = "prematch";
+            blendFixtureId = nextMatch.fixture_id;
+          }
+        }
+      }
+
+      // Pure matchElo when no blend active
+      const eloForPricing = blendMode !== "none" ? finalElo : elo;
       const rawPrice = Math.max(PRICE_FLOOR, (eloForPricing - PRICE_ZERO) / PRICE_SLOPE);
       const roundedPrice = Math.round(rawPrice * 100) / 100;
 
@@ -771,48 +839,100 @@ export async function runPricingEngine(options?: {
         drift_elo: driftEloValue,
       });
 
+      // Collect live price snapshots (only when realTime + live blend active)
+      if (realTime && blendMode === "live") {
+        livePriceRows.push({
+          team,
+          league,
+          timestamp: new Date().toISOString(),
+          model: "oracle",
+          implied_elo: Math.round(eloForPricing * 10) / 10,
+          dollar_price: roundedPrice,
+          blend_mode: "live",
+          fixture_id: blendFixtureId,
+        });
+      }
+
       // DO NOT: teamElo.set(team, finalElo) ← WRONG, corrupts state
     }
 
-    // 6. Match probabilities — use blended Elos
+    // 6. Match probabilities — use two-state blended Elos
     for (const m of todaysMatches) {
       const bookOdds = getBestOddsAsOf(m.fixture_id, endOfDay, oddsIndex);
       if (!bookOdds) continue;
 
-      // Compute blended Elos for home and away teams
+      // Compute blended Elos for home and away teams (same two-state logic)
       const homeEloRaw = teamElo.get(m.home_team) ?? INITIAL_ELO;
       const awayEloRaw = teamElo.get(m.away_team) ?? INITIAL_ELO;
 
       let homeElo = homeEloRaw;
       let awayElo = awayEloRaw;
 
-      // Apply blend to home team
-      const homeNext = findNextMatch(m.home_team, date, matches, 14);
-      if (homeNext) {
-        const homeOdds = getLatestOddsForFixture(homeNext.fixture_id, date, oddsIndex);
-        if (homeOdds && homeOdds.homeOdds > 0 && homeOdds.drawOdds > 0 && homeOdds.awayOdds > 0) {
-          const { homeProb, drawProb, awayProb } = normalizeOdds(homeOdds.homeOdds, homeOdds.drawOdds, homeOdds.awayOdds);
-          const isHome = homeNext.home_team === m.home_team;
-          const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
-          const opp = isHome ? homeNext.away_team : homeNext.home_team;
-          const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
-          const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
-          homeElo = (1 - PREMATCH_WEIGHT) * homeEloRaw + PREMATCH_WEIGHT * implied;
+      // Blend home team — check live first (realTime only), then prematch
+      let homeBlended = false;
+      if (realTime) {
+        const homeLive = findLiveMatch(m.home_team, matches);
+        if (homeLive) {
+          const hLiveOdds = getCurrentMatchOdds((homeLive as Match).fixture_id, oddsIndex);
+          if (hLiveOdds && hLiveOdds.homeOdds > 0 && hLiveOdds.drawOdds > 0 && hLiveOdds.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(hLiveOdds.homeOdds, hLiveOdds.drawOdds, hLiveOdds.awayOdds);
+            const isHome = homeLive.home_team === m.home_team;
+            const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+            const opp = isHome ? homeLive.away_team : homeLive.home_team;
+            const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+            const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            homeElo = (1 - LIVE_WEIGHT) * homeEloRaw + LIVE_WEIGHT * implied;
+            homeBlended = true;
+          }
+        }
+      }
+      if (!homeBlended) {
+        const homeNext = findNextMatch(m.home_team, date, matches, 14);
+        if (homeNext) {
+          const homeOdds = getLatestOddsForFixture(homeNext.fixture_id, date, oddsIndex);
+          if (homeOdds && homeOdds.homeOdds > 0 && homeOdds.drawOdds > 0 && homeOdds.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(homeOdds.homeOdds, homeOdds.drawOdds, homeOdds.awayOdds);
+            const isHome = homeNext.home_team === m.home_team;
+            const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+            const opp = isHome ? homeNext.away_team : homeNext.home_team;
+            const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+            const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            homeElo = (1 - PREMATCH_WEIGHT) * homeEloRaw + PREMATCH_WEIGHT * implied;
+          }
         }
       }
 
-      // Apply blend to away team
-      const awayNext = findNextMatch(m.away_team, date, matches, 14);
-      if (awayNext) {
-        const awayOddsData = getLatestOddsForFixture(awayNext.fixture_id, date, oddsIndex);
-        if (awayOddsData && awayOddsData.homeOdds > 0 && awayOddsData.drawOdds > 0 && awayOddsData.awayOdds > 0) {
-          const { homeProb, drawProb, awayProb } = normalizeOdds(awayOddsData.homeOdds, awayOddsData.drawOdds, awayOddsData.awayOdds);
-          const isHome = awayNext.home_team === m.away_team;
-          const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
-          const opp = isHome ? awayNext.away_team : awayNext.home_team;
-          const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
-          const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
-          awayElo = (1 - PREMATCH_WEIGHT) * awayEloRaw + PREMATCH_WEIGHT * implied;
+      // Blend away team — check live first (realTime only), then prematch
+      let awayBlended = false;
+      if (realTime) {
+        const awayLive = findLiveMatch(m.away_team, matches);
+        if (awayLive) {
+          const aLiveOdds = getCurrentMatchOdds((awayLive as Match).fixture_id, oddsIndex);
+          if (aLiveOdds && aLiveOdds.homeOdds > 0 && aLiveOdds.drawOdds > 0 && aLiveOdds.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(aLiveOdds.homeOdds, aLiveOdds.drawOdds, aLiveOdds.awayOdds);
+            const isHome = awayLive.home_team === m.away_team;
+            const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+            const opp = isHome ? awayLive.away_team : awayLive.home_team;
+            const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+            const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            awayElo = (1 - LIVE_WEIGHT) * awayEloRaw + LIVE_WEIGHT * implied;
+            awayBlended = true;
+          }
+        }
+      }
+      if (!awayBlended) {
+        const awayNext = findNextMatch(m.away_team, date, matches, 14);
+        if (awayNext) {
+          const awayOddsData = getLatestOddsForFixture(awayNext.fixture_id, date, oddsIndex);
+          if (awayOddsData && awayOddsData.homeOdds > 0 && awayOddsData.drawOdds > 0 && awayOddsData.awayOdds > 0) {
+            const { homeProb, drawProb, awayProb } = normalizeOdds(awayOddsData.homeOdds, awayOddsData.drawOdds, awayOddsData.awayOdds);
+            const isHome = awayNext.home_team === m.away_team;
+            const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+            const opp = isHome ? awayNext.away_team : awayNext.home_team;
+            const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+            const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+            awayElo = (1 - PREMATCH_WEIGHT) * awayEloRaw + PREMATCH_WEIGHT * implied;
+          }
         }
       }
 
@@ -855,6 +975,22 @@ export async function runPricingEngine(options?: {
     "fixture_id,model,date"
   );
   log.info(`  match_probabilities: ${mp.inserted} inserted, ${mp.failed} failed`);
+
+  // Write live_prices (only when realTime and there are live rows)
+  if (realTime && livePriceRows.length > 0) {
+    log.info(`Inserting ${livePriceRows.length} live_prices...`);
+    const lp = await upsertBatched(
+      "live_prices",
+      livePriceRows as unknown as Record<string, unknown>[],
+      "team,timestamp,model"
+    );
+    log.info(`  live_prices: ${lp.inserted} inserted, ${lp.failed} failed`);
+  }
+
+  // Cleanup old live_prices (once per day, only in realTime mode)
+  if (realTime) {
+    await cleanupLivePrices();
+  }
 
   // Top 10 oracle prices
   const latestDate = dates[dates.length - 1];

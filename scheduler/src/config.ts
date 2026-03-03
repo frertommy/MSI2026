@@ -101,3 +101,4 @@ export const XG_CEILING = 1.8;                       // max shock multiplier (do
 // ─── Odds blend constants (Phase 2) ─────────────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend
 export const PREMATCH_WEIGHT = 0.30;   // Blend weight: (1-w)*matchElo + w*oddsImplied (MeasureMe winner)
+export const LIVE_WEIGHT = 0.75;       // Blend weight during live matches (heavier than prematch)

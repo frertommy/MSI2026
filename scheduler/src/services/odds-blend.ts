@@ -6,6 +6,8 @@
  *   - oddsImpliedStrength()   — invert Elo expected-score formula
  *   - findNextMatch()         — next fixture strictly after a date
  *   - getLatestOddsForFixture() — latest snapshot as of date, prefer Pinnacle
+ *   - findLiveMatch()         — find a team's current live match
+ *   - getCurrentMatchOdds()   — latest odds snapshot (no date filter)
  *   - calibrateHomeAdvantage() — empirical home win rate → Elo advantage
  */
 import type { DriftSnapshot } from "../types.js";
@@ -129,6 +131,60 @@ export function getLatestOddsForFixture(
   const pick = bestPinnacle ?? bestAny;
   if (!pick || !pick.home_odds || !pick.draw_odds || !pick.away_odds) return null;
 
+  return {
+    homeOdds: pick.home_odds,
+    drawOdds: pick.draw_odds,
+    awayOdds: pick.away_odds,
+  };
+}
+
+// ─── Find live match ────────────────────────────────────────
+/**
+ * Find a live match for a team. Scans ALL matches (not date-filtered)
+ * to handle late-night matches crossing midnight.
+ * Returns the match if status === "live".
+ */
+export function findLiveMatch<
+  M extends { home_team: string; away_team: string; status: string }
+>(team: string, matches: M[]): M | null {
+  for (const m of matches) {
+    if (m.status !== "live") continue;
+    if (m.home_team === team || m.away_team === team) return m;
+  }
+  return null;
+}
+
+// ─── Get current in-play odds ───────────────────────────────
+/**
+ * Get current in-play odds for a live fixture.
+ * Uses the most recent snapshot (no asOfDate filter — we want NOW).
+ * Prefers Pinnacle, max 20 scan backward.
+ */
+export function getCurrentMatchOdds(
+  fixtureId: number,
+  oddsIndex: Map<number, DriftSnapshot[]>
+): { homeOdds: number; drawOdds: number; awayOdds: number } | null {
+  const snapshots = oddsIndex.get(fixtureId);
+  if (!snapshots?.length) return null;
+
+  let bestPinnacle: DriftSnapshot | null = null;
+  let bestAny: DriftSnapshot | null = null;
+  let scanned = 0;
+
+  // Scan from most recent (no date cutoff — want latest available)
+  for (let i = snapshots.length - 1; i >= 0; i--) {
+    const s = snapshots[i];
+    if (!bestAny) bestAny = s;
+    if (s.bookmaker === "pinnacle") {
+      bestPinnacle = s;
+      break;
+    }
+    scanned++;
+    if (scanned > 20) break;
+  }
+
+  const pick = bestPinnacle ?? bestAny;
+  if (!pick || !pick.home_odds || !pick.draw_odds || !pick.away_odds) return null;
   return {
     homeOdds: pick.home_odds,
     drawOdds: pick.draw_odds,
