@@ -102,3 +102,6 @@ export const XG_CEILING = 1.8;                       // max shock multiplier (do
 export const DRIFT_SCALE = 400;        // Elo points per 1.0 probability drift
 export const DRIFT_MIN_HOURS = 12;     // Min gap between earliest/latest snapshot
 export const DRIFT_FADE_DAYS = 7;      // Days-before-kickoff at which drift reaches full weight
+
+// ─── Odds blend constants (Phase 2) ─────────────────────────
+export const PREMATCH_WEIGHT = 0.35;   // Blend weight: (1-w)*matchElo + w*oddsImplied

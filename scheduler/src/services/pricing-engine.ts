@@ -26,11 +26,19 @@ import {
   DRIFT_SCALE,
   DRIFT_MIN_HOURS,
   DRIFT_FADE_DAYS,
+  PREMATCH_WEIGHT,
   XG_ENABLED,
   XG_FLOOR,
   XG_CEILING,
 } from "../config.js";
 import { loadXgData, type XgEntry } from "./understat-poller.js";
+import {
+  calibrateHomeAdvantage,
+  normalizeOdds,
+  oddsImpliedStrength,
+  findNextMatch,
+  getLatestOddsForFixture,
+} from "./odds-blend.js";
 import type {
   Match,
   TeamPrice,
@@ -490,20 +498,8 @@ function buildStartingElos(
   return startingElos;
 }
 
-// ─── Home advantage ──────────────────────────────────────────
-export function calibrateHomeAdvantage(matches: Match[]): number {
-  let homeWins = 0;
-  let total = 0;
-  for (const m of matches) {
-    const sc = parseScore(m.score);
-    if (!sc) continue;
-    total++;
-    if (sc[0] > sc[1]) homeWins++;
-  }
-  const homeWinRate = total > 0 ? homeWins / total : 0.46;
-  const prob = Math.max(0.001, Math.min(0.999, homeWinRate));
-  return -400 * Math.log10(1 / prob - 1);
-}
+// calibrateHomeAdvantage moved to odds-blend.ts — re-export for backward compat
+export { calibrateHomeAdvantage } from "./odds-blend.js";
 
 // ─── xG multiplier ──────────────────────────────────────────
 function xgMultiplier(
@@ -663,7 +659,8 @@ export async function runPricingEngine(options?: {
     matchesByDate.get(m.date)!.push(m);
   }
 
-  for (const date of dates) {
+  for (let _di = 0; _di < dates.length; _di++) {
+    const date = dates[_di];
     const todaysMatches = matchesByDate.get(date) ?? [];
     const playingToday = new Set<string>();
     for (const m of todaysMatches) {
@@ -778,41 +775,112 @@ export async function runPricingEngine(options?: {
     // Only generate output rows for dates we want to write
     if (date < writeFromDate) continue;
 
-    // Odds drift signal for this date
+    // Odds drift signal for this date (kept for Commit 1 — removed in Commit 2)
     const driftMap = computeDriftForDate(date, matches, oddsIndex);
 
-    // 5. Generate prices — single oracle model
+    // 5. Generate prices — single oracle model with odds blend
     for (const team of allTeams) {
       const league = teamLeague.get(team)!;
       const elo = teamElo.get(team) ?? INITIAL_ELO;
       const drift = driftMap.get(team) ?? 0;
-      const driftRounded = Math.round(drift * 10) / 10;
 
+      // Odds blend: find next match, compute odds-implied strength
+      let finalElo = elo;
+      let oddsImplied: number | null = null;
+      let blendActive = false;
+
+      const nextMatch = findNextMatch(team, date, matches, 14);
+      if (nextMatch) {
+        const odds = getLatestOddsForFixture(nextMatch.fixture_id, date, oddsIndex);
+        if (odds && odds.homeOdds > 0 && odds.drawOdds > 0 && odds.awayOdds > 0) {
+          const { homeProb, drawProb, awayProb } = normalizeOdds(
+            odds.homeOdds, odds.drawOdds, odds.awayOdds
+          );
+          const isHome = nextMatch.home_team === team;
+          const teamES = isHome
+            ? homeProb + drawProb * 0.5
+            : awayProb + drawProb * 0.5;
+
+          // Use opponent's matchElo (from teamElo map), NOT blended Elo
+          const opponent = isHome ? nextMatch.away_team : nextMatch.home_team;
+          const oppElo = teamElo.get(opponent) ?? INITIAL_ELO;
+
+          oddsImplied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+
+          // Blend — display only, NOT written back to teamElo
+          finalElo = (1 - PREMATCH_WEIGHT) * elo + PREMATCH_WEIGHT * oddsImplied;
+          blendActive = true;
+        }
+      }
+
+      // Blend overrides drift when active; drift is fallback for IDLE
       const eloWithDrift = elo + drift;
-      const rawPrice = Math.max(PRICE_FLOOR, (eloWithDrift - PRICE_ZERO) / PRICE_SLOPE);
+      const eloForPricing = blendActive ? finalElo : eloWithDrift;
+      const rawPrice = Math.max(PRICE_FLOOR, (eloForPricing - PRICE_ZERO) / PRICE_SLOPE);
       const roundedPrice = Math.round(rawPrice * 100) / 100;
+
+      // drift_elo: store oddsImpliedStrength when blend active, else drift
+      const driftEloValue = oddsImplied !== null
+        ? Math.round(oddsImplied * 10) / 10
+        : Math.round(drift * 10) / 10;
 
       teamPriceRows.push({
         team,
         league,
         date,
         model: "oracle",
-        implied_elo: Math.round(eloWithDrift * 10) / 10,
+        implied_elo: Math.round(eloForPricing * 10) / 10,
         dollar_price: roundedPrice,
         ema_dollar_price: roundedPrice, // No EMA — instant price discovery
         confidence: 1, // Always 1 — column kept for backward compat
         matches_in_window: 0, // Deprecated — kept for backward compat
-        drift_elo: driftRounded,
+        drift_elo: driftEloValue,
       });
+
+      // DO NOT: teamElo.set(team, finalElo) ← WRONG, corrupts state
     }
 
-    // 6. Match probabilities — raw oracle probs only
+    // 6. Match probabilities — use blended Elos
     for (const m of todaysMatches) {
       const bookOdds = getBestOddsAsOf(m.fixture_id, endOfDay, oddsIndex);
       if (!bookOdds) continue;
 
-      const homeElo = (teamElo.get(m.home_team) ?? INITIAL_ELO) + (driftMap.get(m.home_team) ?? 0);
-      const awayElo = (teamElo.get(m.away_team) ?? INITIAL_ELO) + (driftMap.get(m.away_team) ?? 0);
+      // Compute blended Elos for home and away teams
+      const homeEloRaw = teamElo.get(m.home_team) ?? INITIAL_ELO;
+      const awayEloRaw = teamElo.get(m.away_team) ?? INITIAL_ELO;
+
+      let homeElo = homeEloRaw + (driftMap.get(m.home_team) ?? 0);
+      let awayElo = awayEloRaw + (driftMap.get(m.away_team) ?? 0);
+
+      // Apply blend to home team
+      const homeNext = findNextMatch(m.home_team, date, matches, 14);
+      if (homeNext) {
+        const homeOdds = getLatestOddsForFixture(homeNext.fixture_id, date, oddsIndex);
+        if (homeOdds && homeOdds.homeOdds > 0 && homeOdds.drawOdds > 0 && homeOdds.awayOdds > 0) {
+          const { homeProb, drawProb, awayProb } = normalizeOdds(homeOdds.homeOdds, homeOdds.drawOdds, homeOdds.awayOdds);
+          const isHome = homeNext.home_team === m.home_team;
+          const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+          const opp = isHome ? homeNext.away_team : homeNext.home_team;
+          const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+          const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+          homeElo = (1 - PREMATCH_WEIGHT) * homeEloRaw + PREMATCH_WEIGHT * implied;
+        }
+      }
+
+      // Apply blend to away team
+      const awayNext = findNextMatch(m.away_team, date, matches, 14);
+      if (awayNext) {
+        const awayOddsData = getLatestOddsForFixture(awayNext.fixture_id, date, oddsIndex);
+        if (awayOddsData && awayOddsData.homeOdds > 0 && awayOddsData.drawOdds > 0 && awayOddsData.awayOdds > 0) {
+          const { homeProb, drawProb, awayProb } = normalizeOdds(awayOddsData.homeOdds, awayOddsData.drawOdds, awayOddsData.awayOdds);
+          const isHome = awayNext.home_team === m.away_team;
+          const teamES = isHome ? homeProb + drawProb * 0.5 : awayProb + drawProb * 0.5;
+          const opp = isHome ? awayNext.away_team : awayNext.home_team;
+          const oppElo = teamElo.get(opp) ?? INITIAL_ELO;
+          const implied = oddsImpliedStrength(teamES, oppElo, isHome, homeAdv);
+          awayElo = (1 - PREMATCH_WEIGHT) * awayEloRaw + PREMATCH_WEIGHT * implied;
+        }
+      }
 
       const raw = matchProbsFromElo(homeElo, awayElo, homeAdv);
 
