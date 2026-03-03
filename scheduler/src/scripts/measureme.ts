@@ -1,10 +1,11 @@
 /**
  * MeasureMe v2 — Parameter Grid Search
  *
- * Runs 3,120 (slope × K × decay × zeroPoint) configs against real match + odds data.
+ * Runs 260 (K × decay × zeroPoint) configs against real match + odds data.
+ * Slope is fixed (cancels in % returns) — only affects $ display on frontend.
  * Scores each with 7 objective indices. ALL indices use percentage PRICE returns.
  *
- * Optimized: 52 Elo replays (K × decay), then 60 price conversions (slope × zeroPoint).
+ * Optimized: 52 Elo replays (K × decay), then 5 price conversions (zeroPoint).
  *
  * Usage:  cd scheduler && npm run measureme
  */
@@ -98,14 +99,14 @@ const LEGACY_URL =
   "https://raw.githubusercontent.com/frertommy/MSI/main/data/msi_daily.json";
 
 // ─── Parameter Grid ──────────────────────────────────────────
-const SLOPES = [3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 8, 9, 10];
+const DEFAULT_SLOPE = 5; // slope cancels in % returns — only affects $ display
 const KS = [20, 25, 28, 30, 32, 35, 38, 40, 42, 45, 48, 50, 55];
 const DECAYS = [0.001, 0.0015, 0.002, 0.003];
 const ZERO_POINTS = [800, 850, 900, 950, 1000];
 const MA_WINDOW = 45;
 const ELO_REPLAYS = KS.length * DECAYS.length; // 52
-const PRICE_COMBOS = SLOPES.length * ZERO_POINTS.length; // 60
-const TOTAL = ELO_REPLAYS * PRICE_COMBOS; // 3120
+const PRICE_COMBOS = ZERO_POINTS.length; // 5
+const TOTAL = ELO_REPLAYS * PRICE_COMBOS; // 260
 
 // ─── Types ───────────────────────────────────────────────────
 interface MatchRow {
@@ -123,12 +124,18 @@ interface NormOdds {
   awayProb: number;
 }
 
+interface XgInfo {
+  homeXg: number;
+  awayXg: number;
+}
+
 interface RawMatchInfo {
   homeTeam: string;
   awayTeam: string;
   homeGoals: number;
   awayGoals: number;
   odds: NormOdds | null;
+  xg: XgInfo | null;
 }
 
 interface MatchEvent {
@@ -237,42 +244,62 @@ async function loadClosingOdds(
   fixtureIds: number[]
 ): Promise<Map<number, NormOdds>> {
   const sb = getSupabase();
-  const accum = new Map<
+  // Strategy: query closest dbk first (0 = match day), then 1, 2, 3 for remaining
+  // This avoids Supabase 1000-row default limit issues with lte() range queries
+  const rawSnaps = new Map<
     number,
-    { home: number[]; draw: number[]; away: number[] }
+    { hp: number; dp: number; ap: number }[]
   >();
+  const foundFixtures = new Set<number>();
 
-  const BATCH = 50;
-  for (let i = 0; i < fixtureIds.length; i += BATCH) {
-    const batch = fixtureIds.slice(i, i + BATCH);
-    const { data, error } = await sb
-      .from("odds_snapshots")
-      .select("fixture_id, home_odds, away_odds, draw_odds")
-      .in("fixture_id", batch)
-      .eq("days_before_kickoff", 1);
+  for (const dbk of [0, 1, 2, 3]) {
+    const remaining = fixtureIds.filter((id) => !foundFixtures.has(id));
+    if (remaining.length === 0) break;
 
-    if (error || !data) continue;
+    const BATCH = 20;
+    for (let i = 0; i < remaining.length; i += BATCH) {
+      const batch = remaining.slice(i, i + BATCH);
+      let from = 0;
+      const PAGE = 1000;
+      while (true) {
+        const { data, error } = await sb
+          .from("odds_snapshots")
+          .select("fixture_id, home_odds, away_odds, draw_odds")
+          .in("fixture_id", batch)
+          .eq("days_before_kickoff", dbk)
+          .range(from, from + PAGE - 1);
 
-    for (const row of data) {
-      const ho = row.home_odds as number | null;
-      const ao = row.away_odds as number | null;
-      const dw = row.draw_odds as number | null;
-      if (!ho || !ao || !dw || ho <= 1 || ao <= 1 || dw <= 1) continue;
-      if (!accum.has(row.fixture_id))
-        accum.set(row.fixture_id, { home: [], draw: [], away: [] });
-      const e = accum.get(row.fixture_id)!;
-      e.home.push(1 / ho);
-      e.draw.push(1 / dw);
-      e.away.push(1 / ao);
+        if (error || !data || data.length === 0) break;
+
+        for (const row of data) {
+          const ho = row.home_odds as number | null;
+          const ao = row.away_odds as number | null;
+          const dw = row.draw_odds as number | null;
+          if (!ho || !ao || !dw || ho <= 1 || ao <= 1 || dw <= 1) continue;
+          if (!rawSnaps.has(row.fixture_id))
+            rawSnaps.set(row.fixture_id, []);
+          rawSnaps.get(row.fixture_id)!.push({
+            hp: 1 / ho,
+            dp: 1 / dw,
+            ap: 1 / ao,
+          });
+          foundFixtures.add(row.fixture_id);
+        }
+
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
     }
+
+    log.info(`  dbk=${dbk}: ${foundFixtures.size} fixtures found so far`);
   }
 
-  // Mean probabilities per fixture, normalized
+  // Average bookmaker probabilities per fixture, normalized
   const result = new Map<number, NormOdds>();
-  for (const [fid, { home, draw, away }] of accum) {
-    const meanH = home.reduce((a, b) => a + b, 0) / home.length;
-    const meanD = draw.reduce((a, b) => a + b, 0) / draw.length;
-    const meanA = away.reduce((a, b) => a + b, 0) / away.length;
+  for (const [fid, snaps] of rawSnaps) {
+    const meanH = snaps.reduce((a, s) => a + s.hp, 0) / snaps.length;
+    const meanD = snaps.reduce((a, s) => a + s.dp, 0) / snaps.length;
+    const meanA = snaps.reduce((a, s) => a + s.ap, 0) / snaps.length;
     const total = meanH + meanD + meanA;
     if (total <= 0) continue;
     result.set(fid, {
@@ -283,7 +310,7 @@ async function loadClosingOdds(
   }
 
   log.info(
-    `  Closing odds: ${result.size} / ${fixtureIds.length} fixtures with day-1 odds`
+    `  Closing odds: ${result.size} / ${fixtureIds.length} fixtures (closest snapshot ≤3 days)`
   );
   return result;
 }
@@ -321,11 +348,55 @@ async function loadLegacyElos(): Promise<Map<string, number>> {
   }
 }
 
+async function loadXgData(): Promise<Map<number, XgInfo>> {
+  const sb = getSupabase();
+  const map = new Map<number, XgInfo>();
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data, error } = await sb
+      .from("match_xg")
+      .select("fixture_id, home_xg, away_xg")
+      .not("fixture_id", "is", null)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      log.warn("match_xg load error:", error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    for (const r of data) {
+      map.set(r.fixture_id as number, {
+        homeXg: r.home_xg as number,
+        awayXg: r.away_xg as number,
+      });
+    }
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  log.info(`  xG data: ${map.size} fixtures`);
+  return map;
+}
+
+// ─── xG shock multiplier (same as pricing-engine.ts) ─────────
+const XG_FLOOR = 0.4;
+const XG_CEILING = 1.8;
+
+function xgMultiplier(
+  teamXg: number,
+  opponentXg: number,
+  goalDiff: number
+): number {
+  const sign = goalDiff > 0 ? 1 : goalDiff < 0 ? -1 : 0;
+  const raw = 1.0 + 0.3 * (teamXg - opponentXg) * sign;
+  return Math.max(XG_FLOOR, Math.min(XG_CEILING, raw));
+}
+
 // ─── Precompute shared data ──────────────────────────────────
 function precompute(
   matches: MatchRow[],
   oddsMap: Map<number, NormOdds>,
-  legacyElos: Map<string, number>
+  legacyElos: Map<string, number>,
+  xgMap: Map<number, XgInfo>
 ): SharedData {
   const teamLeague = new Map<string, string>();
   for (const m of matches) {
@@ -349,6 +420,7 @@ function precompute(
   for (const m of matches) {
     const sc = parseScore(m.score)!;
     const odds = oddsMap.get(m.fixture_id) ?? null;
+    const xg = xgMap.get(m.fixture_id) ?? null;
     if (!matchesByDate.has(m.date)) matchesByDate.set(m.date, []);
     matchesByDate.get(m.date)!.push({
       homeTeam: m.home_team,
@@ -356,6 +428,7 @@ function precompute(
       homeGoals: sc[0],
       awayGoals: sc[1],
       odds,
+      xg,
     });
 
     // League points (3W + 1D)
@@ -470,8 +543,15 @@ function replayElos(
         awayExpected = 1 - homeExpected;
       }
 
-      const homeShock = K * (homeActual - homeExpected);
-      const awayShock = K * (awayActual - awayExpected);
+      let homeShock = K * (homeActual - homeExpected);
+      let awayShock = K * (awayActual - awayExpected);
+
+      // xG multiplier: amplify dominant wins, dampen lucky wins
+      if (m.xg) {
+        const goalDiff = m.homeGoals - m.awayGoals;
+        homeShock *= xgMultiplier(m.xg.homeXg, m.xg.awayXg, goalDiff);
+        awayShock *= xgMultiplier(m.xg.awayXg, m.xg.homeXg, -goalDiff);
+      }
 
       elo.set(m.homeTeam, homeElo + homeShock);
       elo.set(m.awayTeam, awayElo + awayShock);
@@ -547,10 +627,12 @@ function computeForPriceParams(
   }
 
   // ── Index 1: Surprise-Response R² (25%) ─────────────
+  // Skip day 1 (dateIdx === 0) — re-centering creates artificial moves
   const surprises: number[] = [];
   const priceMoves: number[] = [];
 
   for (const event of matchEvents) {
+    if (event.dateIdx === 0) continue; // skip day 1
     const prices = teamDailyPrices.get(event.team)!;
     const priceBefore = prices[event.dateIdx]; // prev day close
     const priceAfter = prices[event.dateIdx + 1]; // this day close
@@ -583,8 +665,9 @@ function computeForPriceParams(
   let totalReturn = 0;
   let returnCount = 0;
   for (const returns of teamDailyReturns.values()) {
-    for (const r of returns) {
-      totalReturn += r;
+    for (let ri = 1; ri < returns.length; ri++) {
+      // skip returns[0] (day 1)
+      totalReturn += returns[ri];
       returnCount++;
     }
   }
@@ -597,7 +680,8 @@ function computeForPriceParams(
   for (const team of allTeams) {
     const prices = teamDailyPrices.get(team)!;
     let teamHitFloor = false;
-    for (let i = 1; i < prices.length; i++) {
+    for (let i = 2; i < prices.length; i++) {
+      // skip prices[1] (end of day 1)
       totalObs++;
       if (prices[i] <= 10.001) {
         floorCount++;
@@ -611,7 +695,7 @@ function computeForPriceParams(
   // ── Index 4: Return Kurtosis (10%) ──────────────────
   const allReturns: number[] = [];
   for (const returns of teamDailyReturns.values()) {
-    for (const r of returns) allReturns.push(r);
+    for (let ri = 1; ri < returns.length; ri++) allReturns.push(returns[ri]); // skip day 1
   }
   let kurtosis = 3;
   if (allReturns.length >= 20) {
@@ -633,7 +717,8 @@ function computeForPriceParams(
   const tierVols: Record<string, number[]> = { top: [], mid: [], bot: [] };
   for (const team of allTeams) {
     const tier = teamStartingEloTier.get(team) ?? "mid";
-    const returns = teamDailyReturns.get(team)!;
+    const allRet = teamDailyReturns.get(team)!;
+    const returns = allRet.slice(1); // skip day 1
     if (returns.length < 10) continue;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance =
@@ -657,6 +742,7 @@ function computeForPriceParams(
   // Strategy: long 3 days after loss, short 3 days after win
   const teamMatchDays = new Map<string, Map<number, number>>();
   for (const event of matchEvents) {
+    if (event.dateIdx === 0) continue; // skip day 1
     if (!teamMatchDays.has(event.team))
       teamMatchDays.set(event.team, new Map());
     teamMatchDays.get(event.team)!.set(event.dateIdx, event.actualScore);
@@ -669,7 +755,8 @@ function computeForPriceParams(
     let position = 0;
     let holdDays = 0;
 
-    for (let i = 0; i < returns.length; i++) {
+    for (let i = 1; i < returns.length; i++) {
+      // skip returns[0] (day 1)
       // Collect P&L for existing position
       if (position !== 0) {
         dailyPnl.push(position * returns[i]);
@@ -746,7 +833,8 @@ function computeForPriceParams(
   // ── Avg Annual Vol ──────────────────────────────────
   const vols: number[] = [];
   for (const team of allTeams) {
-    const returns = teamDailyReturns.get(team)!;
+    const allRet2 = teamDailyReturns.get(team)!;
+    const returns = allRet2.slice(1); // skip day 1
     if (returns.length < 10) continue;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance =
@@ -756,41 +844,23 @@ function computeForPriceParams(
   const avgAnnualVol =
     vols.length > 0 ? vols.reduce((a, b) => a + b, 0) / vols.length : 0;
 
-  // ── Scoring ─────────────────────────────────────────
-  const s1 = Math.min(100, r2 * 150);
-  const s2 = Math.max(0, 100 * (1 - Math.abs(meanDailyReturn) / 0.1));
-
-  let s3: number;
-  if (floorHitPct === 0) s3 = 100;
-  else if (floorHitPct < 1) s3 = 80;
-  else if (floorHitPct < 3) s3 = 60;
-  else if (floorHitPct < 5) s3 = 40;
-  else if (floorHitPct < 10) s3 = 20;
-  else s3 = 0;
-
-  let s4: number;
-  if (kurtosis >= 4 && kurtosis <= 10) s4 = 100;
-  else if (kurtosis >= 3 && kurtosis <= 15) s4 = 70;
-  else if (kurtosis >= 2 && kurtosis <= 20) s4 = 40;
-  else s4 = 10;
-
-  let s5: number;
-  if (volRatio < 1.5) s5 = 100;
-  else if (volRatio < 2.0) s5 = 85;
-  else if (volRatio < 2.5) s5 = 65;
-  else if (volRatio < 3.0) s5 = 40;
-  else s5 = 15;
-
-  let s6: number;
-  const absSharpe = Math.abs(mrSharpe);
-  if (absSharpe < 0.3) s6 = 100;
-  else if (absSharpe < 0.5) s6 = 70;
-  else if (absSharpe < 0.8) s6 = 40;
-  else s6 = 15;
-
+  // ── Scoring (continuous — no step functions) ────────
+  // R²: 0→0, 0.7→100
+  const s1 = Math.min(100, r2 * 143);
+  // Drift: 0→100, ±0.001→0
+  const s2 = Math.max(0, 100 * (1 - Math.abs(meanDailyReturn) / 0.001));
+  // Floor hit: 0%→100, 10%→0
+  const s3 = Math.max(0, 100 * (1 - floorHitPct / 10));
+  // Kurtosis: peak at 7, ±20→0
+  const s4 = Math.max(0, 100 - Math.abs(kurtosis - 7) * 5);
+  // Vol uniformity: 1.0×→100, 3.0×→0
+  const s5 = Math.max(0, 100 * (1 - (volRatio - 1.0) / 2.0));
+  // MR Sharpe: 0→100, ±0.8→0
+  const s6 = Math.max(0, 100 * (1 - Math.abs(mrSharpe) / 0.8));
+  // Info ratio: 0→0, ~0.91→100
   const s7 = Math.min(100, Math.max(0, infoRatio * 110));
 
-  const composite = Math.round(
+  const composite = round4(
     s1 * 0.25 +
       s2 * 0.15 +
       s3 * 0.15 +
@@ -813,13 +883,13 @@ function computeForPriceParams(
     volUniformityRatio: volRatio,
     meanRevSharpe: mrSharpe,
     infoRatio,
-    surpriseR2Score: Math.round(s1),
-    driftScore: Math.round(s2),
-    floorHitScore: Math.round(s3),
-    kurtosisScore: Math.round(s4),
-    volUniScore: Math.round(s5),
-    meanRevScore: Math.round(s6),
-    infoScore: Math.round(s7),
+    surpriseR2Score: round4(s1),
+    driftScore: round4(s2),
+    floorHitScore: round4(s3),
+    kurtosisScore: round4(s4),
+    volUniScore: round4(s5),
+    meanRevScore: round4(s6),
+    infoScore: round4(s7),
     avgMatchMovePct: avgMatchMove,
     avgAnnualVol,
     totalMatches: matchEvents.length / 2,
@@ -842,9 +912,10 @@ async function main() {
 
   // Phase 1: Load data
   log.info("Phase 1: Loading data...");
-  const [matches, legacyElos] = await Promise.all([
+  const [matches, legacyElos, xgMap] = await Promise.all([
     loadMatches(),
     loadLegacyElos(),
+    loadXgData(),
   ]);
   log.info(`  Matches: ${matches.length} completed`);
 
@@ -853,7 +924,7 @@ async function main() {
 
   // Phase 2: Precompute
   log.info("Phase 2: Precomputing...");
-  const shared = precompute(matches, oddsMap, legacyElos);
+  const shared = precompute(matches, oddsMap, legacyElos, xgMap);
   log.info(`  Teams: ${shared.allTeams.length}`);
   log.info(
     `  Dates: ${shared.dates[0]} → ${shared.dates[shared.dates.length - 1]} (${shared.dates.length} days)`
@@ -874,19 +945,17 @@ async function main() {
       const replay = replayElos(shared, K, decay);
       const replayMs = Date.now() - rt0;
 
-      // Convert to prices for each (slope, zeroPoint) pair
-      for (const slope of SLOPES) {
-        for (const zeroPoint of ZERO_POINTS) {
-          const result = computeForPriceParams(
-            replay,
-            shared,
-            slope,
-            zeroPoint
-          );
-          result.k = K;
-          result.decay = decay;
-          results.push(result);
-        }
+      // Convert to prices for each zeroPoint (slope is fixed — cancels in % returns)
+      for (const zeroPoint of ZERO_POINTS) {
+        const result = computeForPriceParams(
+          replay,
+          shared,
+          DEFAULT_SLOPE,
+          zeroPoint
+        );
+        result.k = K;
+        result.decay = decay;
+        results.push(result);
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -907,7 +976,7 @@ async function main() {
   for (let i = 0; i < Math.min(10, results.length); i++) {
     const r = results[i];
     log.info(
-      `  #${i + 1}  slope=${r.slope} K=${r.k} decay=${r.decay} zp=${r.zeroPoint} → score ${r.composite}`
+      `  #${i + 1}  K=${r.k} decay=${r.decay} zp=${r.zeroPoint} → score ${r.composite}`
     );
   }
   log.info("");

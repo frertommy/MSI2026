@@ -450,9 +450,9 @@ export function OracleClient({ priceHistory, matches, pmPrices }: Props) {
       {/* Spec summary */}
       <div className="border border-border rounded-lg p-3 bg-card/50 text-xs font-mono text-muted">
         <span className="text-foreground font-bold">Oracle 1b:</span>{" "}
-        price = max($10, (elo &minus; 1000) / 5) &middot; K=40 &middot;
+        price = max($10, (elo &minus; 800) / 5) &middot; K=20 &middot;
         forward-looking BT (14d) &middot; freshness exp(&minus;h/72) &middot;
-        live shocks 0.5&times; &middot; carry decay 0.15%/d &rarr; 45d MA &middot;
+        live shocks 0.5&times; &middot; carry decay 0.1%/d &rarr; 45d MA &middot;
         xG [0.4, 1.8]
       </div>
 

@@ -11,7 +11,7 @@ CREATE TABLE measureme_results (
   k_factor NUMERIC NOT NULL,
   decay NUMERIC NOT NULL,
   zero_point NUMERIC NOT NULL,
-  composite_score INTEGER NOT NULL,
+  composite_score NUMERIC NOT NULL,
 
   -- Raw index values
   surprise_r2 NUMERIC,
@@ -22,14 +22,14 @@ CREATE TABLE measureme_results (
   mean_rev_sharpe NUMERIC,
   info_ratio NUMERIC,
 
-  -- Index scores (0-100)
-  surprise_r2_score INTEGER,
-  drift_score INTEGER,
-  floor_hit_score INTEGER,
-  kurtosis_score INTEGER,
-  vol_uni_score INTEGER,
-  mean_rev_score INTEGER,
-  info_score INTEGER,
+  -- Index scores (0-100, continuous)
+  surprise_r2_score NUMERIC,
+  drift_score NUMERIC,
+  floor_hit_score NUMERIC,
+  kurtosis_score NUMERIC,
+  vol_uni_score NUMERIC,
+  mean_rev_score NUMERIC,
+  info_score NUMERIC,
 
   -- Summary stats
   avg_match_move_pct NUMERIC,

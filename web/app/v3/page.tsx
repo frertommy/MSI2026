@@ -276,8 +276,8 @@ function addDays(dateStr: string, days: number): string {
 }
 
 // ─── V2 Price Engine ───────────────────────────────────────
-const V2_K = 40;
-const V2_DECAY_RATE = 0.0015;
+const V2_K = 20;
+const V2_DECAY_RATE = 0.001;
 const V2_MA_WINDOW = 45;
 const V2_XG_FLOOR = 0.4;
 const V2_XG_CEILING = 1.8;
@@ -450,7 +450,7 @@ function computeV2Prices(
 
     // 4. Record data points and update history
     for (const [team, elo] of teamElo) {
-      const price = Math.max(10, (elo - 1000) / 5);
+      const price = Math.max(10, (elo - 800) / 5);
       teamSeries.get(team)?.push({ date: currentDate, elo, price });
 
       const history = teamEloHistory.get(team)!;

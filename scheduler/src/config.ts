@@ -54,10 +54,11 @@ export const INITIAL_ELO = 1500;
 export const BT_ITERATIONS = 50;
 export const WINDOW_DAYS = 60;
 export const DECAY_HALF_LIFE = 14;
-export const PRICE_SLOPE = 5;                    // price = max(FLOOR, (elo-1000)/SLOPE)
+export const PRICE_SLOPE = 5;                    // price = max(FLOOR, (elo-ZERO)/SLOPE)
+export const PRICE_ZERO = 800;                   // elo zero point for pricing
 export const PRICE_FLOOR = 10;                   // minimum dollar price
-export const SHOCK_K = 40;                       // flat K-factor for match shocks
-export const CARRY_DECAY_RATE = 0.0015;          // daily decay rate toward 45d MA
+export const SHOCK_K = 20;                       // flat K-factor for match shocks (xG amplifies)
+export const CARRY_DECAY_RATE = 0.001;           // daily decay rate toward 45d MA
 export const MA_WINDOW = 45;                     // moving average window for carry anchor
 export const BT_FORWARD_DAYS = 14;               // include upcoming matches in BT window
 export const FRESHNESS_HALFLIFE_HOURS = 72;       // odds staleness half-life (hours)

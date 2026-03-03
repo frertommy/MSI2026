@@ -20,152 +20,37 @@ const UNDERSTAT_SLUGS: Record<string, string> = {
 // Current season: 2025 = 2025/26
 const SEASON = 2025;
 
-// ─── Understat name → our canonical name (API-Football) ───────
-// Understat uses short names like "Manchester United", our matches table
-// stores "Manchester United FC". This maps Understat → canonical.
+// ─── Understat name → matches table name ─────────────────────
+// Only map names that differ between Understat and our matches table.
+// Most names match directly (Arsenal, Chelsea, Liverpool, etc.).
 const UNDERSTAT_NAME_MAP: Record<string, string> = {
   // Premier League
-  "Manchester United": "Manchester United FC",
-  "Manchester City": "Manchester City FC",
-  Arsenal: "Arsenal FC",
-  Chelsea: "Chelsea FC",
-  Liverpool: "Liverpool FC",
-  "Tottenham Hotspur": "Tottenham Hotspur FC",
-  "Tottenham": "Tottenham Hotspur FC",
-  "Newcastle United": "Newcastle United FC",
-  "Aston Villa": "Aston Villa FC",
-  "West Ham United": "West Ham United FC",
-  "West Ham": "West Ham United FC",
-  Brighton: "Brighton & Hove Albion FC",
-  "Brighton and Hove Albion": "Brighton & Hove Albion FC",
-  Brentford: "Brentford FC",
-  "Crystal Palace": "Crystal Palace FC",
-  Fulham: "Fulham FC",
-  Bournemouth: "AFC Bournemouth",
-  Wolverhampton: "Wolverhampton Wanderers FC",
-  "Wolverhampton Wanderers": "Wolverhampton Wanderers FC",
-  Wolves: "Wolverhampton Wanderers FC",
-  Everton: "Everton FC",
-  "Nottingham Forest": "Nottingham Forest FC",
-  Leicester: "Leicester City FC",
-  "Leicester City": "Leicester City FC",
-  Ipswich: "Ipswich Town FC",
-  "Ipswich Town": "Ipswich Town FC",
-  Southampton: "Southampton FC",
-  Burnley: "Burnley FC",
-  Leeds: "Leeds United FC",
-  "Leeds United": "Leeds United FC",
-  "Luton Town": "Luton Town FC",
-  "Sheffield United": "Sheffield United FC",
+  "Newcastle United": "Newcastle",
+  "Wolverhampton Wanderers": "Wolves",
 
   // La Liga
-  "Real Madrid": "Real Madrid CF",
-  Barcelona: "FC Barcelona",
-  "Atletico Madrid": "Club Atlético de Madrid",
-  "Athletic Club": "Athletic Club",
-  "Real Sociedad": "Real Sociedad de Fútbol",
-  "Real Betis": "Real Betis Balompié",
-  Villarreal: "Villarreal CF",
-  Sevilla: "Sevilla FC",
-  Valencia: "Valencia CF",
-  "Celta Vigo": "RC Celta de Vigo",
-  Osasuna: "CA Osasuna",
-  Mallorca: "RCD Mallorca",
-  Getafe: "Getafe CF",
-  "Rayo Vallecano": "Rayo Vallecano de Madrid",
-  Girona: "Girona FC",
-  Alaves: "Deportivo Alavés",
-  Espanyol: "RCD Espanyol de Barcelona",
-  "Las Palmas": "UD Las Palmas",
-  Leganes: "CD Leganés",
-  Valladolid: "Real Valladolid CF",
+  "Real Oviedo": "Oviedo",
 
   // Bundesliga
-  "Bayern Munich": "FC Bayern München",
-  "Bayer Leverkusen": "Bayer 04 Leverkusen",
-  "Borussia Dortmund": "BV Borussia 09 Dortmund",
-  "RB Leipzig": "RasenBallsport Leipzig",
-  "Eintracht Frankfurt": "Eintracht Frankfurt",
-  "VfB Stuttgart": "VfB Stuttgart",
-  Freiburg: "Sport-Club Freiburg",
-  "SC Freiburg": "Sport-Club Freiburg",
-  Wolfsburg: "VfL Wolfsburg",
-  "VfL Wolfsburg": "VfL Wolfsburg",
+  "Augsburg": "FC Augsburg",
+  "Bayern Munich": "Bayern München",
   "Borussia M.Gladbach": "Borussia Mönchengladbach",
-  "Borussia Monchengladbach": "Borussia Mönchengladbach",
-  "Union Berlin": "1. FC Union Berlin",
-  "Werder Bremen": "SV Werder Bremen",
-  Augsburg: "FC Augsburg",
-  "FC Augsburg": "FC Augsburg",
-  Hoffenheim: "TSG 1899 Hoffenheim",
-  Mainz: "1. FSV Mainz 05",
-  "Mainz 05": "1. FSV Mainz 05",
-  Heidenheim: "1. FC Heidenheim 1846",
-  "FC Heidenheim": "1. FC Heidenheim 1846",
-  "St. Pauli": "FC St. Pauli 1910",
-  "FC St. Pauli": "FC St. Pauli 1910",
-  Holstein: "Holstein Kiel",
-  "Holstein Kiel": "Holstein Kiel",
-  Bochum: "VfL Bochum 1848",
-  "VfL Bochum": "VfL Bochum 1848",
-  "Hamburger SV": "Hamburger SV",
+  "FC Cologne": "1. FC Köln",
+  "FC Heidenheim": "1. FC Heidenheim",
+  "Freiburg": "SC Freiburg",
+  "Hoffenheim": "1899 Hoffenheim",
+  "Mainz 05": "FSV Mainz 05",
+  "RasenBallsport Leipzig": "RB Leipzig",
+  "St. Pauli": "FC St. Pauli",
+  "Wolfsburg": "VfL Wolfsburg",
 
   // Serie A
-  Inter: "FC Internazionale Milano",
-  "Inter Milan": "FC Internazionale Milano",
-  Napoli: "SSC Napoli",
-  Juventus: "Juventus FC",
-  Milan: "AC Milan",
-  "AC Milan": "AC Milan",
-  Atalanta: "Atalanta BC",
-  Lazio: "SS Lazio",
-  Roma: "AS Roma",
-  "AS Roma": "AS Roma",
-  Fiorentina: "ACF Fiorentina",
-  Bologna: "Bologna FC 1909",
-  Torino: "Torino FC",
-  Udinese: "Udinese Calcio",
-  Genoa: "Genoa CFC",
-  Cagliari: "Cagliari Calcio",
-  Empoli: "Empoli FC",
-  "Empoli FC": "Empoli FC",
-  Parma: "Parma Calcio 1913",
-  "Parma Calcio 1913": "Parma Calcio 1913",
-  Como: "Como 1907",
-  "Como 1907": "Como 1907",
-  Verona: "Hellas Verona FC",
-  "Hellas Verona": "Hellas Verona FC",
-  Lecce: "US Lecce",
-  Monza: "AC Monza",
-  "AC Monza": "AC Monza",
-  Sassuolo: "US Sassuolo Calcio",
-  Venezia: "Venezia FC",
-  "Venezia FC": "Venezia FC",
+  "Parma Calcio 1913": "Parma",
+  "Roma": "AS Roma",
+  "Verona": "Hellas Verona",
 
   // Ligue 1
-  "Paris Saint Germain": "Paris Saint-Germain FC",
-  "Paris Saint-Germain": "Paris Saint-Germain FC",
-  Marseille: "Olympique de Marseille",
-  Monaco: "AS Monaco FC",
-  Lyon: "Olympique Lyonnais",
-  Lille: "Lille OSC",
-  Nice: "OGC Nice",
-  Rennes: "Stade Rennais FC 1901",
-  Lens: "Racing Club de Lens",
-  Strasbourg: "RC Strasbourg Alsace",
-  Toulouse: "Toulouse FC",
-  Nantes: "FC Nantes",
-  Montpellier: "Montpellier HSC",
-  "Montpellier HSC": "Montpellier HSC",
-  Reims: "Stade de Reims",
-  "Stade de Reims": "Stade de Reims",
-  Brest: "Stade Brestois 29",
-  "Stade Brestois 29": "Stade Brestois 29",
-  "Le Havre": "Le Havre AC",
-  Auxerre: "AJ Auxerre",
-  Angers: "Angers SCO",
-  "Saint-Etienne": "AS Saint-Étienne",
-  "Saint Etienne": "AS Saint-Étienne",
+  "Brest": "Stade Brestois 29",
 };
 
 function resolveUnderstatName(name: string): string {
@@ -173,35 +58,32 @@ function resolveUnderstatName(name: string): string {
 }
 
 // ─── Understat data types ─────────────────────────────────────
+// API response uses short keys: h/a instead of home/away
 interface UnderstatMatch {
   id: string;
   isResult: boolean;
   datetime: string;
-  home: { title: string; id: string };
-  away: { title: string; id: string };
+  h: { title: string; id: string; short_title: string };
+  a: { title: string; id: string; short_title: string };
   goals: { h: string; a: string };
   xG: { h: string; a: string };
   forecast: { w: string; d: string; l: string };
-}
-
-// ─── Parse hex-encoded JSON from Understat ────────────────────
-function decodeHex(encoded: string): string {
-  return encoded.replace(/\\x([0-9A-Fa-f]{2})/g, (_match, hex) =>
-    String.fromCharCode(parseInt(hex, 16))
-  );
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ─── Scrape one league page ───────────────────────────────────
-async function scrapeLeague(slug: string): Promise<UnderstatMatch[]> {
-  const url = `https://understat.com/league/${slug}/${SEASON}`;
+// ─── Fetch one league via Understat AJAX API ─────────────────
+async function fetchLeague(slug: string): Promise<UnderstatMatch[]> {
+  const url = `https://understat.com/getLeagueData/${slug}/${SEASON}`;
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (compatible; MSI2026-bot/1.0; +https://github.com/frertommy/MSI2026)",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "X-Requested-With": "XMLHttpRequest",
+      "Accept": "application/json",
+      "Referer": `https://understat.com/league/${slug}/${SEASON}`,
     },
   });
 
@@ -209,82 +91,44 @@ async function scrapeLeague(slug: string): Promise<UnderstatMatch[]> {
     throw new Error(`Understat HTTP ${resp.status} for ${slug}`);
   }
 
-  const html = await resp.text();
-
-  // Find the datesData JSON blob in a <script> tag
-  const marker = "datesData";
-  const markerIdx = html.indexOf(marker);
-  if (markerIdx === -1) {
-    throw new Error(`datesData not found in ${slug} page`);
-  }
-
-  // Pattern: datesData = JSON.parse('...')
-  const startQuote = html.indexOf("('", markerIdx);
-  if (startQuote === -1) {
-    throw new Error(`Could not find JSON.parse start quote for ${slug}`);
-  }
-  const endQuote = html.indexOf("')", startQuote + 2);
-  if (endQuote === -1) {
-    throw new Error(`Could not find JSON.parse end quote for ${slug}`);
-  }
-
-  const hexEncoded = html.slice(startQuote + 2, endQuote);
-  const decoded = decodeHex(hexEncoded);
-
-  let parsed: UnderstatMatch[];
-  try {
-    parsed = JSON.parse(decoded) as UnderstatMatch[];
-  } catch (err) {
-    throw new Error(
-      `Failed to parse datesData JSON for ${slug}: ${err instanceof Error ? err.message : err}`
-    );
-  }
-
-  return parsed;
+  const data = await resp.json();
+  return (data.dates ?? []) as UnderstatMatch[];
 }
 
-// ─── Match to fixtures ────────────────────────────────────────
-async function lookupFixtureId(
-  date: string,
-  homeTeam: string,
-  awayTeam: string
-): Promise<number | null> {
-  const sb = getSupabase();
+// ─── Batch fixture lookup ─────────────────────────────────────
+// Load all matches into an in-memory map for fast lookup instead of
+// 1,241 individual DB queries. Keys: "date|home|away" and "±1day|home|away".
+async function buildFixtureLookup(): Promise<Map<string, number>> {
+  const lookup = new Map<string, number>();
+  const rows = await fetchAllRows<Record<string, unknown>>(
+    "matches",
+    "fixture_id, date, home_team, away_team"
+  );
 
-  // Try exact match first
-  const { data } = await sb
-    .from("matches")
-    .select("fixture_id")
-    .eq("date", date)
-    .eq("home_team", homeTeam)
-    .eq("away_team", awayTeam)
-    .limit(1)
-    .single();
+  for (const r of rows) {
+    const fid = r.fixture_id as number;
+    const date = String(r.date);
+    const home = String(r.home_team);
+    const away = String(r.away_team);
 
-  if (data) return data.fixture_id as number;
+    // Exact date key
+    lookup.set(`${date}|${home}|${away}`, fid);
 
-  // Try ±1 day for timezone edge cases
-  const dateObj = new Date(date);
-  const dayBefore = new Date(dateObj.getTime() - 86400000)
-    .toISOString()
-    .slice(0, 10);
-  const dayAfter = new Date(dateObj.getTime() + 86400000)
-    .toISOString()
-    .slice(0, 10);
-
-  for (const d of [dayBefore, dayAfter]) {
-    const { data: fuzzy } = await sb
-      .from("matches")
-      .select("fixture_id")
-      .eq("date", d)
-      .eq("home_team", homeTeam)
-      .eq("away_team", awayTeam)
-      .limit(1)
-      .single();
-    if (fuzzy) return fuzzy.fixture_id as number;
+    // ±1 day for timezone edge cases
+    const d = new Date(date);
+    const dayBefore = new Date(d.getTime() - 86400000).toISOString().slice(0, 10);
+    const dayAfter = new Date(d.getTime() + 86400000).toISOString().slice(0, 10);
+    // Only set fuzzy keys if they don't overwrite an exact match
+    if (!lookup.has(`${dayBefore}|${home}|${away}`)) {
+      lookup.set(`${dayBefore}|${home}|${away}`, fid);
+    }
+    if (!lookup.has(`${dayAfter}|${home}|${away}`)) {
+      lookup.set(`${dayAfter}|${home}|${away}`, fid);
+    }
   }
 
-  return null;
+  log.info(`  Fixture lookup: ${rows.length} matches loaded`);
+  return lookup;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -296,9 +140,14 @@ export async function pollUnderstatXg(): Promise<{
   fixturesMatched: number;
 }> {
   log.info("Understat: polling xG data...");
+
+  // Build in-memory fixture lookup (replaces 1,241 individual DB queries)
+  const fixtureLookup = await buildFixtureLookup();
+
   const rows: Record<string, unknown>[] = [];
   let totalMatches = 0;
   let fixturesMatched = 0;
+  const unmatchedNames = new Set<string>();
 
   const leagues = Object.entries(UNDERSTAT_SLUGS);
 
@@ -306,18 +155,23 @@ export async function pollUnderstatXg(): Promise<{
     const [league, slug] = leagues[i];
 
     try {
-      const matches = await scrapeLeague(slug);
+      const matches = await fetchLeague(slug);
       const completed = matches.filter((m) => m.isResult);
       totalMatches += completed.length;
       log.info(`  Understat ${league}: ${completed.length} completed matches`);
 
       for (const m of completed) {
-        const homeTeam = resolveUnderstatName(m.home.title);
-        const awayTeam = resolveUnderstatName(m.away.title);
+        const homeTeam = resolveUnderstatName(m.h.title);
+        const awayTeam = resolveUnderstatName(m.a.title);
         const date = m.datetime.slice(0, 10); // "2026-01-15 17:30:00" → "2026-01-15"
 
-        const fixtureId = await lookupFixtureId(date, homeTeam, awayTeam);
-        if (fixtureId !== null) fixturesMatched++;
+        const key = `${date}|${homeTeam}|${awayTeam}`;
+        const fixtureId = fixtureLookup.get(key) ?? null;
+        if (fixtureId !== null) {
+          fixturesMatched++;
+        } else {
+          unmatchedNames.add(`${homeTeam} vs ${awayTeam}`);
+        }
 
         rows.push({
           understat_id: m.id,
@@ -344,6 +198,10 @@ export async function pollUnderstatXg(): Promise<{
 
     // Rate limit between leagues
     if (i < leagues.length - 1) await sleep(500);
+  }
+
+  if (unmatchedNames.size > 0) {
+    log.warn(`  ${unmatchedNames.size} unmatched team pairs: ${[...unmatchedNames].slice(0, 10).join(", ")}${unmatchedNames.size > 10 ? "..." : ""}`);
   }
 
   if (rows.length === 0) {

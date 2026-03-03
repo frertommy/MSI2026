@@ -334,8 +334,8 @@ export function V3Client({ startingElos, priceHistory, v2Series }: Props) {
       {/* V2 spec summary */}
       <div className="border border-border rounded-lg p-3 bg-card/50 text-xs font-mono text-muted">
         <span className="text-foreground font-bold">V2 Spec:</span>{" "}
-        price = max($10, (elo − 1000) / 5) &middot; K=40 &middot;
-        carry decay 0.15%/day → 45d MA &middot;
+        price = max($10, (elo − 800) / 5) &middot; K=20 &middot;
+        carry decay 0.1%/day → 45d MA &middot;
         xG mult [0.4, 1.8] &middot; shocks permanent
       </div>
 

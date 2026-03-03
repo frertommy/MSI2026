@@ -2,7 +2,7 @@
  * Pricing engine — MeasureMe-validated, Step 1b.
  *
  * Key features:
- *   - Linear pricing: max(FLOOR, (elo-1000)/SLOPE) instead of logistic
+ *   - Linear pricing: max(FLOOR, (elo-ZERO)/SLOPE) instead of logistic
  *   - 1/0.5/0 scoring (zero-sum) instead of 3/1/0
  *   - Permanent shocks (no exponential decay)
  *   - Carry decay toward 45-day MA anchor (not fixed league mean)
@@ -21,6 +21,7 @@ import {
   DECAY_HALF_LIFE,
   SHOCK_K,
   PRICE_SLOPE,
+  PRICE_ZERO,
   PRICE_FLOOR,
   CARRY_DECAY_RATE,
   MA_WINDOW,
@@ -753,7 +754,7 @@ export async function runPricingEngine(options?: {
       const mInW = matchesInWindow.get(team) ?? 0;
 
       const eloWithDrift = elo + drift;
-      const rawPrice = Math.max(PRICE_FLOOR, (eloWithDrift - 1000) / PRICE_SLOPE);
+      const rawPrice = Math.max(PRICE_FLOOR, (eloWithDrift - PRICE_ZERO) / PRICE_SLOPE);
       const roundedPrice = Math.round(rawPrice * 100) / 100;
 
       // EMA smoothing
