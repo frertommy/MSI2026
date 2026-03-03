@@ -20,17 +20,6 @@ const LEAGUE_COLOR: Record<string, string> = {
   "Ligue 1": "text-cyan-400",
 };
 
-function formatProb(prob: number): string {
-  return (prob * 100).toFixed(1) + "%";
-}
-
-function probColor(prob: number): string {
-  if (prob >= 0.55) return "text-accent-green";
-  if (prob >= 0.4) return "text-accent-amber";
-  if (prob > 0) return "text-accent-red";
-  return "text-muted";
-}
-
 function priceColor(price: number | null): string {
   if (price === null) return "text-muted";
   if (price >= 65) return "text-accent-green";
@@ -119,7 +108,6 @@ export function TeamTable({
               <th className="py-2 px-3 text-left w-16">League</th>
               <th className="py-2 px-3 text-right w-16">Elo</th>
               <th className="py-2 px-3 text-right w-20">Price</th>
-              <th className="py-2 px-3 text-right w-24">Win Prob</th>
               <th className="py-2 px-3 text-right w-10">P</th>
               <th className="py-2 px-3 text-center w-24">W-D-L</th>
               <th className="py-2 px-3 text-center w-16">Form</th>
@@ -162,15 +150,6 @@ export function TeamTable({
                 >
                   {t.dollarPrice !== null
                     ? `$${t.dollarPrice.toFixed(2)}`
-                    : "---"}
-                </td>
-                <td
-                  className={`py-2 px-3 text-right font-mono font-bold ${probColor(
-                    t.avgImpliedWinProb
-                  )}`}
-                >
-                  {t.avgImpliedWinProb > 0
-                    ? formatProb(t.avgImpliedWinProb)
                     : "---"}
                 </td>
                 <td className="py-2 px-3 text-right font-mono text-muted">

@@ -36,63 +36,26 @@ async function fetchLatestPrices(): Promise<Map<string, { price: number; elo: nu
   return map;
 }
 
-// Supabase caps .select() at 1000 rows by default; we need all matches + odds
 async function fetchAllMatches(): Promise<Match[]> {
-  const { data, error } = await supabase
-    .from("matches")
-    .select("fixture_id, date, league, home_team, away_team, score, status")
-    .order("date", { ascending: true });
-
-  if (error) {
-    console.error("matches fetch error:", error.message);
-    return [];
-  }
-  return data ?? [];
-}
-
-// Fetch odds by fixture batches — only closing odds (days_before_kickoff = 1)
-async function fetchClosingOdds(
-  fixtureIds: number[]
-): Promise<Map<number, { homeProb: number; awayProb: number }>> {
-  const accum = new Map<number, { homeProbs: number[]; awayProbs: number[] }>();
-
-  // Batch by 100 fixture IDs — much faster than scanning 2M+ row table
-  const BATCH = 100;
-  for (let i = 0; i < fixtureIds.length; i += BATCH) {
-    const batch = fixtureIds.slice(i, i + BATCH);
+  const all: Match[] = [];
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
     const { data, error } = await supabase
-      .from("odds_snapshots")
-      .select("fixture_id, home_odds, away_odds")
-      .in("fixture_id", batch)
-      .eq("days_before_kickoff", 1);
-
+      .from("matches")
+      .select("fixture_id, date, league, home_team, away_team, score, status")
+      .order("date", { ascending: true })
+      .range(from, from + pageSize - 1);
     if (error) {
-      console.error("odds batch error:", error.message);
-      continue;
+      console.error("matches fetch error:", error.message);
+      break;
     }
-    if (!data) continue;
-
-    for (const row of data) {
-      if (!row.home_odds || !row.away_odds || row.home_odds <= 0 || row.away_odds <= 0) continue;
-
-      if (!accum.has(row.fixture_id)) {
-        accum.set(row.fixture_id, { homeProbs: [], awayProbs: [] });
-      }
-      const entry = accum.get(row.fixture_id)!;
-      entry.homeProbs.push(1 / row.home_odds);
-      entry.awayProbs.push(1 / row.away_odds);
-    }
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
-
-  const map = new Map<number, { homeProb: number; awayProb: number }>();
-  for (const [fid, { homeProbs, awayProbs }] of accum) {
-    map.set(fid, {
-      homeProb: homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length,
-      awayProb: awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length,
-    });
-  }
-
-  return map;
+  return all;
 }
 
 function parseScore(score: string): [number, number] | null {
@@ -106,7 +69,6 @@ function parseScore(score: string): [number, number] | null {
 
 function computeTeamRows(
   matches: Match[],
-  oddsMap: Map<number, { homeProb: number; awayProb: number }>,
   priceMap: Map<string, { price: number; elo: number }>
 ): TeamRow[] {
   const teamStats = new Map<
@@ -117,7 +79,6 @@ function computeTeamRows(
       wins: number;
       draws: number;
       losses: number;
-      impliedProbs: number[];
       latestDate: string;
     }
   >();
@@ -130,7 +91,6 @@ function computeTeamRows(
         wins: 0,
         draws: 0,
         losses: 0,
-        impliedProbs: [],
         latestDate: "",
       });
     }
@@ -142,8 +102,6 @@ function computeTeamRows(
     if (!parsed) continue;
     const [hg, ag] = parsed;
 
-    const odds = oddsMap.get(m.fixture_id);
-
     // Home team
     const home = getOrCreate(m.home_team, m.league);
     home.played++;
@@ -151,7 +109,6 @@ function computeTeamRows(
     if (hg > ag) home.wins++;
     else if (hg === ag) home.draws++;
     else home.losses++;
-    if (odds) home.impliedProbs.push(odds.homeProb);
 
     // Away team
     const away = getOrCreate(m.away_team, m.league);
@@ -160,22 +117,15 @@ function computeTeamRows(
     if (ag > hg) away.wins++;
     else if (ag === hg) away.draws++;
     else away.losses++;
-    if (odds) away.impliedProbs.push(odds.awayProb);
   }
 
   const rows: TeamRow[] = [];
   for (const [team, stats] of teamStats) {
-    const avgProb =
-      stats.impliedProbs.length > 0
-        ? stats.impliedProbs.reduce((a, b) => a + b, 0) /
-          stats.impliedProbs.length
-        : 0;
     const teamData = priceMap.get(team);
     rows.push({
       rank: 0,
       team,
       league: stats.league,
-      avgImpliedWinProb: avgProb,
       played: stats.played,
       wins: stats.wins,
       draws: stats.draws,
@@ -193,20 +143,15 @@ function computeTeamRows(
   return rows;
 }
 
-export const dynamic = "force-dynamic"; // skip build-time generation (odds table is 2M+ rows)
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  // Phase 1: fetch matches + prices in parallel
   const [matches, priceMap] = await Promise.all([
     fetchAllMatches(),
     fetchLatestPrices(),
   ]);
 
-  // Phase 2: fetch odds by fixture IDs (needs matches first)
-  const fixtureIds = matches.map((m) => m.fixture_id);
-  const oddsMap = await fetchClosingOdds(fixtureIds);
-
-  const teams = computeTeamRows(matches, oddsMap, priceMap);
+  const teams = computeTeamRows(matches, priceMap);
   const leagues = [...new Set(teams.map((t) => t.league))].sort();
 
   return (
@@ -220,42 +165,9 @@ export default async function Home() {
               MSI 2026
             </h1>
           </div>
-          <div className="flex items-center gap-4">
-            <a
-              href="/matches"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Matches &rarr;
-            </a>
-            <a
-              href="/analytics"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Analytics &rarr;
-            </a>
-            <a
-              href="/v2"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              V2 Pricing &rarr;
-            </a>
-            <a
-              href="/v3"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Simulation &rarr;
-            </a>
-            <a
-              href="/measureme"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              MeasureMe &rarr;
-            </a>
-            <span className="text-xs text-muted font-mono">
-              {teams.length} teams &middot; {matches.length} matches &middot;{" "}
-              {oddsMap.size} odds fixtures
-            </span>
-          </div>
+          <span className="text-xs text-muted font-mono">
+            {teams.length} teams &middot; {matches.length} matches
+          </span>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
