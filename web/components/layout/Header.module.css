@@ -1,0 +1,47 @@
+.root {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  background: var(--background);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.logo {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--foreground) !important;
+  text-decoration: none;
+}
+
+.navLinks {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.link {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted) !important;
+  text-decoration: none;
+  transition: color 0.15s ease;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.link:hover {
+  color: var(--accent-green) !important;
+}
+
+.linkActive {
+  color: var(--foreground) !important;
+}

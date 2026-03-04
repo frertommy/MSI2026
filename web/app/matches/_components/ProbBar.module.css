@@ -1,0 +1,42 @@
+.root {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.header {
+  margin-bottom: 6px;
+}
+
+.label {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.source {
+  font-size: 9px !important;
+  color: var(--muted);
+  opacity: 0.6;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.track {
+  display: flex;
+  height: 8px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.segGreen { background: var(--accent-green); transition: width 0.3s ease; }
+.segAmber { background: var(--accent-amber); transition: width 0.3s ease; }
+.segRed   { background: var(--accent-red);   transition: width 0.3s ease; }
+
+.labels {
+  margin-top: 4px;
+}
+
+.pctGreen { font-size: 10px !important; color: var(--accent-green); font-family: var(--font-geist-mono), monospace; }
+.pctAmber { font-size: 10px !important; color: var(--accent-amber); font-family: var(--font-geist-mono), monospace; }
+.pctRed   { font-size: 10px !important; color: var(--accent-red);   font-family: var(--font-geist-mono), monospace; }

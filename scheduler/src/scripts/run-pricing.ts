@@ -5,8 +5,8 @@
  *   cd scheduler && npx tsx src/scripts/run-pricing.ts --incremental  # incremental (last 2 days)
  */
 import "dotenv/config";
-import { log } from "../logger.js";
-import { runPricingEngine } from "../services/pricing-engine.js";
+import { log } from "../core/logger.js";
+import { runPricingEngine } from "../services/pricing/pricing-engine.js";
 
 async function main() {
   const incremental = process.argv.includes("--incremental");

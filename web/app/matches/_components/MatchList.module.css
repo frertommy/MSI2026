@@ -1,0 +1,73 @@
+.filterBtn {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+  padding: 4px 10px !important;
+  height: auto !important;
+  border-radius: 4px !important;
+  transition: border-color 0.15s, color 0.15s !important;
+}
+
+.filterBtn:hover {
+  border-color: var(--muted) !important;
+  color: var(--foreground) !important;
+}
+
+.filterBtnActive {
+  background: var(--foreground) !important;
+  border-color: var(--foreground) !important;
+  color: var(--background) !important;
+}
+
+.formulaHint {
+  margin-bottom: 24px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.dateHeader {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.dateDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  flex-shrink: 0;
+}
+
+.dateLabel {
+  font-size: 14px !important;
+  font-weight: 700;
+  color: var(--foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dateCount {
+  font-size: 12px !important;
+  color: var(--muted);
+}
+
+.empty {
+  margin-top: 48px;
+  text-align: center;
+  padding: 64px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.emptyIcon { font-size: 24px !important; margin-bottom: 12px; }
+.emptyTitle { font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--foreground); }
+.emptyHint { font-size: 12px !important; color: var(--muted); margin-top: 4px; }

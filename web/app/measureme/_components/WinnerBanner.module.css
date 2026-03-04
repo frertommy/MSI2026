@@ -1,0 +1,82 @@
+.root {
+  border: 2px solid var(--accent-green);
+  border-radius: 8px;
+  padding: 24px;
+  background: var(--surface);
+}
+
+.rank {
+  font-size: 20px !important;
+  font-weight: 700;
+  color: var(--accent-green);
+}
+
+.title {
+  font-size: 18px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--foreground);
+}
+
+.count {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.paramLabel {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.paramValue {
+  font-size: 12px !important;
+  font-weight: 700;
+  color: var(--foreground);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.codeBlock {
+  margin-top: 16px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.codeComment {
+  font-size: 11px !important;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.codeLine {
+  font-size: 11px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.keyword {
+  color: var(--accent-green);
+}
+
+.scoreBox {
+  text-align: right;
+}
+
+.scoreValue {
+  font-size: 48px !important;
+  font-weight: 700;
+  color: var(--accent-green);
+  font-family: var(--font-geist-mono), monospace;
+  line-height: 1;
+}
+
+.scoreLabel {
+  font-size: 11px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  margin-top: 4px;
+}

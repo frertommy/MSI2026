@@ -1,0 +1,55 @@
+.root {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 24px;
+  background: #0d0d0d;
+}
+
+.inner {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.dotLive {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  flex-shrink: 0;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.dotOffline {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.liveLabel {
+  font-size: 10px !important;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.offlineLabel {
+  font-size: 10px !important;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.divider {
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}

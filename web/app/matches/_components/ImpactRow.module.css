@@ -1,0 +1,29 @@
+.root {
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.label {
+  font-size: 11px !important;
+  color: var(--muted);
+}
+
+.delta {
+  font-size: 12px !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pct {
+  font-size: 10px !important;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+.arrow {
+  font-size: 10px !important;
+}
+
+.green { color: var(--accent-green); }
+.amber { color: var(--accent-amber); }
+.red   { color: var(--accent-red); }
+.muted { color: var(--muted); }

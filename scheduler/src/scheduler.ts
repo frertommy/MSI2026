@@ -8,22 +8,24 @@ import {
   POLYMARKET_POLL_INTERVAL,
   XG_ENABLED,
   XG_POLL_INTERVAL,
-} from "./config.js";
-import { log } from "./logger.js";
-import { updateHealth } from "./health.js";
-import { getSupabase } from "./api/supabase-client.js";
-import { pollOdds, pollOutrights } from "./services/odds-poller.js";
+} from "./config/index.js";
+import { log } from "./core/logger.js";
+import { updateHealth } from "./core/health.js";
+import { getSupabase } from "./core/supabase.js";
+import { pollOdds, pollOutrights } from "./services/odds/odds-poller.js";
 import {
   pollPolymarketMatches,
   pollPolymarketFutures,
   matchPolymarketToFixtures,
-} from "./services/polymarket-poller.js";
-import { refreshMatches } from "./services/match-tracker.js";
-import { runPricingEngine } from "./services/pricing-engine.js";
-import { pollUnderstatXg } from "./services/understat-poller.js";
-import { CreditTracker } from "./services/credit-tracker.js";
+} from "./services/polymarket/gamma-poller.js";
+import { SportsWsService } from "./services/polymarket/sports-ws.js";
+import { ClobPollerService } from "./services/polymarket/clob-poller.js";
+import { refreshMatches } from "./services/matches/match-tracker.js";
+import { runPricingEngine } from "./services/pricing/pricing-engine.js";
+import { pollUnderstatXg } from "./services/matches/understat-poller.js";
+import { CreditTracker } from "./services/odds/credit-tracker.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
-import type { PollResult } from "./types.js";
+import type { PollResult } from "./types/index.js";
 
 export class Scheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -37,25 +39,29 @@ export class Scheduler {
   private lastHourlyPoll = 0;
   private lastPolymarketPoll = 0;
   private lastUnderstatPoll = 0;
+  private sportsWs: SportsWsService;
+  private clobPoller: ClobPollerService;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
 
   constructor() {
     this.creditTracker = new CreditTracker();
+    this.sportsWs = new SportsWsService();
+    this.clobPoller = new ClobPollerService();
   }
 
   async start(): Promise<void> {
     this.running = true;
     log.info("Scheduler starting...");
 
-    // Build team lookup on startup
     this.lookup = await buildTeamLookup();
 
-    // Run first cycle immediately
+    this.sportsWs.start();
+    this.clobPoller.start();
+
     await this.runCycle();
 
-    // Schedule next
     this.scheduleNext();
   }
 
@@ -65,6 +71,8 @@ export class Scheduler {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.sportsWs.stop();
+    this.clobPoller.stop();
     log.info(`Scheduler stopped after ${this.cycleCount} cycles`);
   }
 

@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { validateEnv } from "./config.js";
-import { log } from "./logger.js";
-import { startHealthServer } from "./health.js";
+import { validateEnv } from "./config/index.js";
+import { log } from "./core/logger.js";
+import { startHealthServer } from "./core/health.js";
 import { Scheduler } from "./scheduler.js";
 
 async function main() {

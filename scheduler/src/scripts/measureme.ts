@@ -10,17 +10,17 @@
  * Usage:  cd scheduler && npm run measureme
  */
 import "dotenv/config";
-import { getSupabase, upsertBatched } from "../api/supabase-client.js";
-import { log } from "../logger.js";
-import { INITIAL_ELO } from "../config.js";
+import { getSupabase, upsertBatched } from "../core/supabase.js";
+import { log } from "../core/logger.js";
+import { INITIAL_ELO } from "../config/index.js";
 import {
   calibrateHomeAdvantage,
   normalizeOdds,
   oddsImpliedStrength,
   findNextMatch,
   getLatestOddsForFixture,
-} from "../services/odds-blend.js";
-import type { DriftSnapshot } from "../types.js";
+} from "../services/odds/odds-blend.js";
+import type { DriftSnapshot } from "../types/index.js";
 
 // ─── Legacy Elo name map (API-Football name → Legacy JSON name) ───
 const LEGACY_NAME_MAP: Record<string, string> = {

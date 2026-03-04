@@ -1,0 +1,77 @@
+.root {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  font-size: 12px;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.thead { background: var(--surface); }
+
+.th {
+  padding: 8px 12px !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-bottom: 1px solid var(--border) !important;
+  white-space: nowrap;
+}
+
+.sortable {
+  cursor: pointer;
+}
+
+.sortable:hover {
+  color: var(--foreground) !important;
+}
+
+.row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.row:hover .td {
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+}
+
+.rowSelected .td {
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+}
+
+.td {
+  padding: 8px 12px !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent) !important;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.teamCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.teamDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.teamName {
+  font-size: 12px !important;
+}
+
+.right  { text-align: right !important; }
+.muted  { color: var(--muted) !important; }
+.green  { color: var(--accent-green) !important; }
+.red    { color: var(--accent-red) !important; }
+.cyan   { color: #22d3ee !important; }

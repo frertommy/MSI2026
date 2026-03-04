@@ -1,0 +1,46 @@
+.select {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 14px;
+}
+
+.select select {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--foreground) !important;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: var(--font-geist-mono), monospace;
+  outline: none;
+  min-width: 200px;
+  cursor: pointer;
+}
+
+.select select:focus {
+  border-color: var(--accent-green) !important;
+}
+
+.rangeBtn {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+  padding: 4px 10px !important;
+  height: auto !important;
+  border-radius: 4px !important;
+  transition: border-color 0.15s, color 0.15s !important;
+}
+
+.rangeBtn:hover {
+  border-color: var(--muted) !important;
+  color: var(--foreground) !important;
+}
+
+.rangeBtnActive {
+  background: var(--foreground) !important;
+  border-color: var(--foreground) !important;
+  color: var(--background) !important;
+}

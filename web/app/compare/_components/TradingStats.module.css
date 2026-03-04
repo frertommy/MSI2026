@@ -1,0 +1,40 @@
+.sectionTitle {
+  font-size: 11px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.cardTitle {
+  font-size: 11px !important;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.cardValue {
+  font-size: 18px !important;
+  font-weight: 700;
+  font-family: var(--font-geist-mono), monospace;
+  color: var(--foreground);
+}
+
+.cardSub {
+  font-size: 11px !important;
+  color: var(--muted);
+  margin-top: 4px;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.green { color: var(--accent-green) !important; }
+.amber { color: var(--accent-amber) !important; }
+.red   { color: var(--accent-red) !important; }

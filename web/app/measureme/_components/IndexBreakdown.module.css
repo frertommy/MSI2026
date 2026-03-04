@@ -1,0 +1,75 @@
+.title {
+  font-size: 14px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--foreground);
+}
+
+.subtitle {
+  font-weight: 400 !important;
+  color: var(--muted);
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.cardTitle {
+  font-size: 11px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--foreground);
+}
+
+.cardWeight {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.barTrack {
+  flex: 1;
+  height: 8px;
+  background: var(--background);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.barGreen { background: var(--accent-green); }
+.barAmber { background: var(--accent-amber); }
+.barRed   { background: var(--accent-red); }
+
+.scoreValue {
+  font-size: 14px !important;
+  font-weight: 700;
+  font-family: var(--font-geist-mono), monospace;
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.green { color: var(--accent-green) !important; }
+.amber { color: var(--accent-amber) !important; }
+.red   { color: var(--accent-red) !important; }
+
+.meta { display: flex; flex-direction: column; gap: 2px; }
+
+.metaLine {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.metaDim {
+  color: color-mix(in srgb, var(--foreground) 40%, transparent) !important;
+}

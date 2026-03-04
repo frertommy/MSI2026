@@ -3,9 +3,9 @@
  * Walks through Q1 (Arsenal match) and Q5 (index deep dive) computations
  */
 import "dotenv/config";
-import { getSupabase } from "../api/supabase-client.js";
-import { log } from "../logger.js";
-import { INITIAL_ELO } from "../config.js";
+import { getSupabase } from "../core/supabase.js";
+import { log } from "../core/logger.js";
+import { INITIAL_ELO } from "../config/index.js";
 
 const LEGACY_NAME_MAP: Record<string, string> = {
   Arsenal: "Arsenal FC",

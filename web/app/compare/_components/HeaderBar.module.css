@@ -1,0 +1,60 @@
+.root {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.leagueDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.teamName {
+  font-size: 18px !important;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.leagueBadge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.leagueBadgeText {
+  font-size: 11px !important;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.divider {
+  display: none;
+}
+
+@media (min-width: 576px) {
+  .divider { display: block; height: 20px; }
+}
+
+.statCell {
+  text-align: center;
+}
+
+.statLabel {
+  font-size: 11px !important;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.statValue {
+  font-size: 16px !important;
+  font-weight: 700;
+  font-family: var(--font-geist-mono), monospace;
+  color: var(--foreground);
+}
+
+.green { color: var(--accent-green) !important; }
+.amber { color: var(--accent-amber) !important; }
+.red   { color: var(--accent-red) !important; }

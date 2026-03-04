@@ -1,0 +1,24 @@
+.root {
+  display: flex;
+  height: 6px;
+  width: 64px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.win {
+  background: var(--accent-green);
+  height: 100%;
+}
+
+.draw {
+  background: var(--accent-amber);
+  height: 100%;
+}
+
+.loss {
+  background: var(--accent-red);
+  height: 100%;
+  flex: 1;
+}

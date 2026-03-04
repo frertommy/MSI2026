@@ -1,0 +1,141 @@
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  font-size: 13px;
+  border-collapse: collapse;
+}
+
+.headerRow {
+  border-bottom: 1px solid var(--border);
+}
+
+.th {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.td {
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  white-space: nowrap;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.row {
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.row:hover {
+  background: var(--surface-hover) !important;
+}
+
+.row:hover .teamName {
+  color: var(--accent-green) !important;
+}
+
+.colRank {
+  text-align: right;
+  width: 40px;
+}
+
+.right {
+  text-align: right;
+}
+
+.center {
+  text-align: center;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.bold {
+  font-weight: 700;
+}
+
+.xs {
+  font-size: 11px;
+}
+
+.teamName {
+  font-weight: 600;
+  color: var(--foreground);
+  transition: color 0.1s ease;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.win {
+  color: var(--accent-green);
+}
+
+.draw {
+  color: var(--accent-amber);
+}
+
+.loss {
+  color: var(--accent-red);
+}
+
+/* League colors */
+.league_EPL { color: #c084fc; font-weight: 700; font-size: 11px; }
+.league_ESP { color: #fb923c; font-weight: 700; font-size: 11px; }
+.league_BUN { color: #f87171; font-weight: 700; font-size: 11px; }
+.league_ITA { color: #60a5fa; font-weight: 700; font-size: 11px; }
+.league_FRA { color: #22d3ee; font-weight: 700; font-size: 11px; }
+.league_other { color: var(--muted); font-weight: 700; font-size: 11px; }
+
+/* Filter buttons */
+.filterBtn {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted) !important;
+  font-family: var(--font-geist-mono), 'Courier New', monospace !important;
+  padding: 4px 10px !important;
+  height: auto !important;
+  border-radius: 4px !important;
+  transition: border-color 0.15s ease, color 0.15s ease !important;
+}
+
+.filterBtn:hover {
+  border-color: var(--muted) !important;
+  color: var(--foreground) !important;
+}
+
+.filterBtnActive {
+  background: var(--foreground) !important;
+  border-color: var(--foreground) !important;
+  color: var(--background) !important;
+}
+
+.filterBtnActive:hover {
+  background: var(--foreground) !important;
+  color: var(--background) !important;
+}
+
+.empty {
+  margin-top: 32px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 48px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}

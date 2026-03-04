@@ -1,0 +1,66 @@
+.filterBtn {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+  border-radius: 4px !important;
+}
+
+.filterBtn:hover { color: var(--foreground) !important; }
+
+.filterBtnActive {
+  background: var(--accent-green) !important;
+  border-color: var(--accent-green) !important;
+  color: var(--background) !important;
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legendLabel {
+  font-size: 11px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.spec {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.specBold {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.showAllBtn {
+  font-size: 11px !important;
+  color: var(--accent-green) !important;
+  border-color: color-mix(in srgb, var(--accent-green) 30%, transparent) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+}
+
+.showAllBtn:hover {
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent) !important;
+}
+
+.showLessBtn {
+  font-size: 11px !important;
+  color: var(--muted) !important;
+  border-color: var(--border) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+}
+
+.showLessBtn:hover { color: var(--foreground) !important; }

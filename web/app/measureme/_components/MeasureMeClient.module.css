@@ -1,0 +1,149 @@
+.sectionTitle {
+  font-size: 14px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--foreground);
+}
+
+.subtitle {
+  font-weight: 400 !important;
+  color: var(--muted);
+}
+
+.tableWrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.priceTableWrapper {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  font-size: 12px;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.thead {
+  background: var(--surface);
+}
+
+.th {
+  padding: 8px 8px !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-bottom: 1px solid var(--border) !important;
+  white-space: nowrap;
+}
+
+.sortable {
+  cursor: pointer;
+}
+
+.sortable:hover {
+  color: var(--foreground) !important;
+}
+
+.row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.rowBest .td { background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
+.rowBest:hover .td { background: color-mix(in srgb, var(--accent-green) 20%, transparent); }
+.rowSelected .td { background: var(--surface); }
+
+.row:hover .td {
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+}
+
+.td {
+  padding: 6px 8px !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent) !important;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.right  { text-align: right !important; }
+.muted  { color: var(--muted) !important; }
+.green  { color: var(--accent-green) !important; }
+.amber  { color: var(--accent-amber) !important; }
+.red    { color: var(--accent-red) !important; }
+.bold   { font-weight: 700; }
+
+.atFloor {
+  font-size: 10px !important;
+  color: var(--accent-red);
+}
+
+.showAllBtn {
+  font-size: 11px !important;
+  color: var(--accent-green) !important;
+  border-color: color-mix(in srgb, var(--accent-green) 30%, transparent) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+}
+
+.showAllBtn:hover { background: color-mix(in srgb, var(--accent-green) 10%, transparent) !important; }
+
+.showLessBtn {
+  font-size: 11px !important;
+  color: var(--muted) !important;
+  border-color: var(--border) !important;
+  font-family: var(--font-geist-mono), monospace !important;
+}
+
+.showLessBtn:hover { color: var(--foreground) !important; }
+
+.slopeLabel {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.slopeSelect select {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--foreground) !important;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-geist-mono), monospace;
+  outline: none;
+}
+
+.slopeSelect select:focus { border-color: var(--accent-green) !important; }
+
+.slopeHint {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.noData {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.formula {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  margin-top: 8px;
+}
+
+.footer {
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+}

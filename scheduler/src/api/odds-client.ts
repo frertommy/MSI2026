@@ -1,6 +1,6 @@
-import { ODDS_API_KEY, LEAGUE_SPORT_KEYS, OUTRIGHT_SPORT_KEYS } from "../config.js";
-import { log } from "../logger.js";
-import type { LiveOddsEvent } from "../types.js";
+import { ODDS_API_KEY, LEAGUE_SPORT_KEYS, OUTRIGHT_SPORT_KEYS } from "../config/index.js";
+import { log } from "../core/logger.js";
+import type { LiveOddsEvent } from "../types/index.js";
 
 const BASE_URL = "https://api.the-odds-api.com/v4/sports";
 

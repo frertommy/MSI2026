@@ -1,0 +1,55 @@
+.root {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.header {
+  padding: 12px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  font-size: 11px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.row {
+  padding: 12px 16px;
+  transition: background 0.1s;
+}
+
+.row:hover {
+  background: var(--surface-hover);
+}
+
+.divider {
+  border-color: color-mix(in srgb, var(--border) 50%, transparent) !important;
+}
+
+.date {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  width: 80px;
+}
+
+.opponent {
+  font-size: 14px !important;
+  color: var(--foreground);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.venue {
+  font-size: 12px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.probGreen { font-size: 12px !important; color: var(--accent-green); font-family: var(--font-geist-mono), monospace; }
+.probAmber { font-size: 12px !important; color: var(--accent-amber); font-family: var(--font-geist-mono), monospace; }
+.probRed   { font-size: 12px !important; color: var(--accent-red);   font-family: var(--font-geist-mono), monospace; }

@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { getSupabase } from "../api/supabase-client.js";
-import { log } from "../logger.js";
+import { getSupabase } from "../core/supabase.js";
+import { log } from "../core/logger.js";
 
 async function main() {
   const sb = getSupabase();

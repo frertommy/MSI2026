@@ -1,0 +1,66 @@
+.root {
+  min-width: 0;
+}
+
+.providerLabel {
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  width: 80px;
+  flex-shrink: 0;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.barTrack {
+  width: 80px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.barGreen { background: var(--accent-green); }
+.barAmber { background: var(--accent-amber); }
+.barRed   { background: var(--accent-red); }
+
+.usageText {
+  font-size: 11px !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+.textGreen { color: var(--accent-green); }
+.textAmber { color: var(--accent-amber); }
+.textRed   { color: var(--accent-red); }
+
+.meta {
+  font-size: 10px !important;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: var(--font-geist-mono), 'Courier New', monospace;
+}
+
+@media (max-width: 576px) {
+  .hiddenSm { display: none; }
+}
+
+@media (max-width: 768px) {
+  .hiddenMd { display: none; }
+}
+
+@media (max-width: 992px) {
+  .hiddenLg { display: none; }
+}

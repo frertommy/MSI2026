@@ -1,0 +1,94 @@
+.root {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  transition: background 0.15s ease;
+}
+
+.root:hover {
+  background: var(--surface-hover);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.leagueLabel {
+  font-size: 10px !important;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font-geist-mono), monospace;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.league_EPL .leagueLabel { color: #c084fc; border-color: rgba(192,132,252,0.2); background: rgba(192,132,252,0.1); }
+.league_ESP .leagueLabel { color: #fb923c; border-color: rgba(251,146,60,0.2);  background: rgba(251,146,60,0.1); }
+.league_BUN .leagueLabel { color: #f87171; border-color: rgba(248,113,113,0.2); background: rgba(248,113,113,0.1); }
+.league_ITA .leagueLabel { color: #60a5fa; border-color: rgba(96,165,250,0.2);  background: rgba(96,165,250,0.1); }
+.league_FRA .leagueLabel { color: #22d3ee; border-color: rgba(34,211,238,0.2);  background: rgba(34,211,238,0.1); }
+.leagueDefault .leagueLabel { color: var(--muted); border-color: var(--border); background: transparent; }
+
+.date {
+  font-size: 10px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.body {
+  padding: 12px 16px;
+}
+
+.teamsGrid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.homeTeam { display: flex; flex-direction: column; gap: 8px; }
+.awayTeam { display: flex; flex-direction: column; gap: 8px; text-align: right; }
+
+.teamName {
+  font-size: 14px !important;
+  font-weight: 700;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teamMeta {
+  font-size: 11px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.impacts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.vs {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.vsLabel {
+  font-size: 12px !important;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  font-family: var(--font-geist-mono), monospace;
+}

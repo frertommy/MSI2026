@@ -1,0 +1,21 @@
+export const POLL_INTERVALS = {
+  NO_MATCHES_TODAY: 120 * 60 * 1000,
+  FAR_FROM_KICKOFF: 60 * 60 * 1000,
+  APPROACHING: 5 * 60 * 1000,
+  CLOSE: 2 * 60 * 1000,
+  IMMINENT: 30 * 1000,
+  POST_KICKOFF: 10 * 60 * 1000,
+} as const;
+
+export const CREDITS_DAILY_SOFT_LIMIT = 450;
+export const CREDITS_PER_LEAGUE_CALL = 3;
+export const CREDITS_FALLBACK_INTERVAL = 60 * 60 * 1000;
+
+export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000;
+export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000;
+export const DAILY_CREDIT_SAFETY = 400;
+
+export const POLYMARKET_POLL_INTERVAL = 10 * 60 * 1000;
+
+export const XG_ENABLED = true;
+export const XG_POLL_INTERVAL = 4 * 60 * 60 * 1000;

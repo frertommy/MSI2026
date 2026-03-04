@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { log } from "../logger.js";
-import { fetchAllRows } from "../api/supabase-client.js";
-import type { MatchLookupEntry, LiveOddsEvent } from "../types.js";
+import { log } from "../core/logger.js";
+import { fetchAllRows } from "../core/supabase.js";
+import type { MatchLookupEntry, LiveOddsEvent } from "../types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

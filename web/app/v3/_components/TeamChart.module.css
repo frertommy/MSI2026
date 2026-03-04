@@ -1,0 +1,33 @@
+.root {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.leagueDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.teamName {
+  font-size: 14px !important;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.meta {
+  flex-shrink: 0;
+}
+
+.metaItem {
+  font-size: 11px !important;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  white-space: nowrap;
+}
+
+.green { color: var(--accent-green) !important; }
+.red   { color: var(--accent-red) !important; }
