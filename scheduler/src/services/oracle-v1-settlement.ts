@@ -446,7 +446,9 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.home_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_home.toFixed(4)),
+      m1_value: 0,
       published_index: Number(B_after_home.toFixed(4)),
+      confidence_score: 0,
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
@@ -478,7 +480,9 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.away_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_away.toFixed(4)),
+      m1_value: 0,
       published_index: Number(B_after_away.toFixed(4)),
+      confidence_score: 0,
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
@@ -536,7 +540,8 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
   log.info(
     `Settlement: ${match.home_team} (ΔB=${delta_B_home > 0 ? "+" : ""}${delta_B_home.toFixed(2)}) ` +
     `vs ${match.away_team} (ΔB=${delta_B_away > 0 ? "+" : ""}${delta_B_away.toFixed(2)}) ` +
-    `[${match.score}, ${frozenKR.bookmaker_count} books, E_KR=${E_KR_home.toFixed(3)}/${E_KR_away.toFixed(3)}]`
+    `[${match.score}, ${frozenKR.bookmaker_count} books, E_KR=${E_KR_home.toFixed(3)}/${E_KR_away.toFixed(3)}] ` +
+    `— M1/conf reset to 0 for both teams`
   );
 
   return {
