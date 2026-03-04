@@ -56,6 +56,9 @@ interface RefreshM1Result {
 /** Home advantage in Elo points — used to strip venue bias from odds-implied strength */
 const HOME_ADVANTAGE_ELO = 65;
 
+/** Maximum absolute M1 overlay in Elo points — prevents market layer from overwhelming B */
+const MAX_M1_ABS = 75;
+
 // ─── Main function ──────────────────────────────────────────
 
 /**
@@ -261,7 +264,8 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   // ── Step 6: Compute M1 ──────────────────────────────────
   const M1_raw = R_market_fixture - B_value;
-  const M1 = confidence * M1_raw;
+  const M1_unclamped = confidence * M1_raw;
+  const M1 = Math.max(-MAX_M1_ABS, Math.min(MAX_M1_ABS, M1_unclamped));
   const published_index = B_value + M1;
 
   // ── Step 7: Write outputs ────────────────────────────────

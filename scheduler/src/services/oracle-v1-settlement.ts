@@ -446,6 +446,7 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.home_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_home.toFixed(4)),
+      published_index: Number(B_after_home.toFixed(4)),
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
@@ -477,6 +478,7 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.away_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_away.toFixed(4)),
+      published_index: Number(B_after_away.toFixed(4)),
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
