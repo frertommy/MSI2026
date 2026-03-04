@@ -345,11 +345,11 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       failureRows.push({
         fixture_id: fixtureId,
         team_id: teamId,
-        E_KR: 0,
-        actual_score_S: teamId === match.home_team ? S_home : S_away,
-        delta_B: 0,
-        B_before: 0,
-        B_after: 0,
+        e_kr: 0,
+        actual_score_s: teamId === match.home_team ? S_home : S_away,
+        delta_b: 0,
+        b_before: 0,
+        b_after: 0,
         trace_payload: failurePayload,
       });
     }
@@ -382,18 +382,18 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
   // ── Step 5: Load current B values ────────────────────────
   const { data: homeState } = await sb
     .from("team_oracle_state")
-    .select("B_value")
+    .select("b_value")
     .eq("team_id", match.home_team)
     .single();
 
   const { data: awayState } = await sb
     .from("team_oracle_state")
-    .select("B_value")
+    .select("b_value")
     .eq("team_id", match.away_team)
     .single();
 
-  const B_before_home = homeState ? Number(homeState.B_value) : 0;
-  const B_before_away = awayState ? Number(awayState.B_value) : 0;
+  const B_before_home = homeState ? Number(homeState.b_value) : 0;
+  const B_before_away = awayState ? Number(awayState.b_value) : 0;
 
   const B_after_home = B_before_home + delta_B_home;
   const B_after_away = B_before_away + delta_B_away;
@@ -435,17 +435,17 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
     logRows.push({
       fixture_id: fixtureId,
       team_id: match.home_team,
-      E_KR: Number(E_KR_home.toFixed(6)),
-      actual_score_S: S_home,
-      delta_B: Number(delta_B_home.toFixed(6)),
-      B_before: Number(B_before_home.toFixed(6)),
-      B_after: Number(B_after_home.toFixed(6)),
+      e_kr: Number(E_KR_home.toFixed(6)),
+      actual_score_s: S_home,
+      delta_b: Number(delta_B_home.toFixed(6)),
+      b_before: Number(B_before_home.toFixed(6)),
+      b_after: Number(B_after_home.toFixed(6)),
       trace_payload: { ...tracePayload, perspective: "home" },
     });
     stateUpserts.push({
       team_id: match.home_team,
       season: deriveSeason(match.date),
-      B_value: Number(B_after_home.toFixed(4)),
+      b_value: Number(B_after_home.toFixed(4)),
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
@@ -453,8 +453,8 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team: match.home_team,
       league: match.league,
       timestamp: now,
-      B_value: Number(B_after_home.toFixed(4)),
-      M1_value: 0,
+      b_value: Number(B_after_home.toFixed(4)),
+      m1_value: 0,
       published_index: Number(B_after_home.toFixed(4)),
       confidence_score: null,
       source_fixture_id: fixtureId,
@@ -466,17 +466,17 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
     logRows.push({
       fixture_id: fixtureId,
       team_id: match.away_team,
-      E_KR: Number(E_KR_away.toFixed(6)),
-      actual_score_S: S_away,
-      delta_B: Number(delta_B_away.toFixed(6)),
-      B_before: Number(B_before_away.toFixed(6)),
-      B_after: Number(B_after_away.toFixed(6)),
+      e_kr: Number(E_KR_away.toFixed(6)),
+      actual_score_s: S_away,
+      delta_b: Number(delta_B_away.toFixed(6)),
+      b_before: Number(B_before_away.toFixed(6)),
+      b_after: Number(B_after_away.toFixed(6)),
       trace_payload: { ...tracePayload, perspective: "away" },
     });
     stateUpserts.push({
       team_id: match.away_team,
       season: deriveSeason(match.date),
-      B_value: Number(B_after_away.toFixed(4)),
+      b_value: Number(B_after_away.toFixed(4)),
       last_kr_fixture_id: fixtureId,
       updated_at: now,
     });
@@ -484,8 +484,8 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team: match.away_team,
       league: match.league,
       timestamp: now,
-      B_value: Number(B_after_away.toFixed(4)),
-      M1_value: 0,
+      b_value: Number(B_after_away.toFixed(4)),
+      m1_value: 0,
       published_index: Number(B_after_away.toFixed(4)),
       confidence_score: null,
       source_fixture_id: fixtureId,

@@ -102,6 +102,7 @@ export const XG_CEILING = 1.8;                       // max shock multiplier (do
 // ─── Oracle V1 constants ─────────────────────────────────────
 export const ORACLE_V1_K = 30;         // Fixed K-factor for B-layer settlement: ΔB = 30 × (S − E_KR)
 export const ORACLE_V1_BASELINE_ELO = 1500;  // Bootstrap B_value for new teams (league-neutral in v1)
+export const ORACLE_V1_SETTLEMENT_START_DATE = "2025-08-01"; // Only settle matches from current odds-covered season
 
 // Feature flags — default OFF, zero behavior change until explicitly enabled
 export const ORACLE_V1_ENABLED =

@@ -75,11 +75,11 @@ export default async function OracleV1Page() {
   const [teamStates, settlements, matches] = await Promise.all([
     fetchAll<TeamOracleRow>(
       "team_oracle_state",
-      "team_id, season, B_value, M1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts, updated_at"
+      "team_id, season, B_value:b_value, M1_value:m1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts, updated_at"
     ),
     fetchAll<SettlementRow>(
       "settlement_log",
-      "settlement_id, fixture_id, team_id, E_KR, actual_score_S, delta_B, B_before, B_after, settled_at, trace_payload",
+      "settlement_id, fixture_id, team_id, E_KR:e_kr, actual_score_S:actual_score_s, delta_B:delta_b, B_before:b_before, B_after:b_after, settled_at, trace_payload",
       undefined,
       "settled_at",
       false // most recent first

@@ -22,7 +22,7 @@
 import { getSupabase } from "../api/supabase-client.js";
 import { settleFixture } from "./oracle-v1-settlement.js";
 import { refreshM1 } from "./oracle-v1-market.js";
-import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO } from "../config.js";
+import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE } from "../config.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -223,8 +223,8 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       const bootstrapRows = missingTeams.map(t => ({
         team_id: t.team,
         season,
-        B_value: ORACLE_V1_BASELINE_ELO,
-        M1_value: 0,
+        b_value: ORACLE_V1_BASELINE_ELO,
+        m1_value: 0,
         published_index: ORACLE_V1_BASELINE_ELO,
         confidence_score: 0,
         next_fixture_id: null,
@@ -246,8 +246,8 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
           team: t.team,
           league: t.league,
           timestamp: now,
-          B_value: ORACLE_V1_BASELINE_ELO,
-          M1_value: 0,
+          b_value: ORACLE_V1_BASELINE_ELO,
+          m1_value: 0,
           published_index: ORACLE_V1_BASELINE_ELO,
           confidence_score: 0,
           source_fixture_id: null,
@@ -350,6 +350,7 @@ async function fetchAllFinished(
       .from("matches")
       .select("fixture_id, home_team, away_team, score, date")
       .eq("status", "finished")
+      .gte("date", ORACLE_V1_SETTLEMENT_START_DATE)
       .order("date", { ascending: true })
       .range(from, from + pageSize - 1);
 

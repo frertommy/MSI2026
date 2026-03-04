@@ -34,8 +34,8 @@ interface OddsSnapshotRow {
 
 interface TeamOracleState {
   team_id: string;
-  B_value: number;
-  M1_value: number;
+  b_value: number;
+  m1_value: number;
   published_index: number;
   confidence_score: number | null;
   next_fixture_id: number | null;
@@ -103,19 +103,19 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     return { updated: false, skipped_reason: "next_fixture_query_error" };
   }
 
-  // Load the team's current B_value (needed for all paths)
+  // Load the team's current b_value (needed for all paths)
   const { data: teamState } = await sb
     .from("team_oracle_state")
-    .select("B_value")
+    .select("b_value")
     .eq("team_id", team)
     .single();
 
-  const B_value = teamState ? Number(teamState.B_value) : 0;
+  const B_value = teamState ? Number(teamState.b_value) : 0;
 
   // No upcoming fixture → M1 = 0, published_index = B_value
   if (!nextFixtures || nextFixtures.length === 0) {
     await writeM1State(sb, team, {
-      M1_value: 0,
+      m1_value: 0,
       published_index: B_value,
       confidence_score: 0,
       next_fixture_id: null,
@@ -196,7 +196,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   // Insufficient books → c(t) = 0, M1 = 0
   if (bookmakerCount < 2) {
     await writeM1State(sb, team, {
-      M1_value: 0,
+      m1_value: 0,
       published_index: B_value,
       confidence_score: 0,
       next_fixture_id: nextFixture.fixture_id,
@@ -242,14 +242,14 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     ? consensusHomeProb + 0.5 * consensusDrawProb
     : consensusAwayProb + 0.5 * consensusDrawProb;
 
-  // Opponent's current B_value as their Elo proxy
+  // Opponent's current b_value as their Elo proxy
   const { data: opponentState } = await sb
     .from("team_oracle_state")
-    .select("B_value")
+    .select("b_value")
     .eq("team_id", opponent)
     .single();
 
-  const opponentB = opponentState ? Number(opponentState.B_value) : 0;
+  const opponentB = opponentState ? Number(opponentState.b_value) : 0;
 
   // Invert odds into team-level Elo-equivalent strength
   const R_market_fixture = oddsImpliedStrength(
@@ -266,7 +266,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   // ── Step 7: Write outputs ────────────────────────────────
   await writeM1State(sb, team, {
-    M1_value: M1,
+    m1_value: M1,
     published_index,
     confidence_score: confidence,
     next_fixture_id: nextFixture.fixture_id,
@@ -280,8 +280,8 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
         team,
         league: await getTeamLeague(sb, team),
         timestamp: new Date().toISOString(),
-        B_value: Number(B_value.toFixed(4)),
-        M1_value: Number(M1.toFixed(4)),
+        b_value: Number(B_value.toFixed(4)),
+        m1_value: Number(M1.toFixed(4)),
         published_index: Number(published_index.toFixed(4)),
         confidence_score: Number(confidence.toFixed(4)),
         source_fixture_id: nextFixture.fixture_id,
@@ -346,7 +346,7 @@ async function writeM1State(
   sb: ReturnType<typeof getSupabase>,
   team: string,
   data: {
-    M1_value: number;
+    m1_value: number;
     published_index: number;
     confidence_score: number;
     next_fixture_id: number | null;
@@ -357,7 +357,7 @@ async function writeM1State(
   const { error } = await sb
     .from("team_oracle_state")
     .update({
-      M1_value: Number(data.M1_value.toFixed(4)),
+      m1_value: Number(data.m1_value.toFixed(4)),
       published_index: Number(data.published_index.toFixed(4)),
       confidence_score: Number(data.confidence_score.toFixed(4)),
       next_fixture_id: data.next_fixture_id,
@@ -373,7 +373,7 @@ async function writeM1State(
         .from("team_oracle_state")
         .upsert([{
           team_id: team,
-          M1_value: Number(data.M1_value.toFixed(4)),
+          m1_value: Number(data.m1_value.toFixed(4)),
           published_index: Number(data.published_index.toFixed(4)),
           confidence_score: Number(data.confidence_score.toFixed(4)),
           next_fixture_id: data.next_fixture_id,

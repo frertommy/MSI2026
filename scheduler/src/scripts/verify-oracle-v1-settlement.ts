@@ -94,8 +94,8 @@ async function checkCoverage() {
   const settlements = await fetchAll<{
     fixture_id: number;
     team_id: string;
-    delta_B: number;
-  }>("settlement_log", "fixture_id, team_id, delta_B");
+    delta_b: number;
+  }>("settlement_log", "fixture_id, team_id, delta_b");
 
   // Build set of settled fixture_ids (a fixture is "settled" if BOTH teams have entries)
   const settlementsByFixture = new Map<number, Set<string>>();
@@ -154,7 +154,7 @@ async function checkCoverage() {
 
 // ─── Section 2: KR Snapshot Health ──────────────────────────
 
-async function checkKRHealth(settlements: { fixture_id: number; team_id: string; delta_B: number }[]) {
+async function checkKRHealth(settlements: { fixture_id: number; team_id: string; delta_b: number }[]) {
   console.log("\n" + "═".repeat(70));
   console.log("  2. KR SNAPSHOT HEALTH (oracle_kr_snapshots)");
   console.log("═".repeat(70));
@@ -246,18 +246,18 @@ async function checkBValues() {
   // Load all team_oracle_state rows
   const teamStates = await fetchAll<{
     team_id: string;
-    B_value: number;
+    b_value: number;
     season: string;
     updated_at: string;
-  }>("team_oracle_state", "team_id, B_value, season, updated_at");
+  }>("team_oracle_state", "team_id, b_value, season, updated_at");
 
   // Load settlement counts per team
   const settlements = await fetchAll<{
     team_id: string;
-    delta_B: number;
+    delta_b: number;
     settled_at: string;
     trace_payload: Record<string, unknown> | null;
-  }>("settlement_log", "team_id, delta_B, settled_at, trace_payload");
+  }>("settlement_log", "team_id, delta_b, settled_at, trace_payload");
 
   // Group settlements by team
   const byTeam = new Map<string, typeof settlements>();
@@ -274,10 +274,10 @@ async function checkBValues() {
   const issues: string[] = [];
 
   // Sort by B_value descending for display
-  teamStates.sort((a, b) => Number(b.B_value) - Number(a.B_value));
+  teamStates.sort((a, b) => Number(b.b_value) - Number(a.b_value));
 
   console.log(`\n  Team B Values (top 10 / bottom 10):\n`);
-  console.log(`  ${"Team".padEnd(28)} ${"B_value".padStart(10)} ${"Matches".padStart(8)} ${"First".padStart(12)} ${"Last".padStart(12)}`);
+  console.log(`  ${"Team".padEnd(28)} ${"b_value".padStart(10)} ${"Matches".padStart(8)} ${"First".padStart(12)} ${"Last".padStart(12)}`);
   console.log(`  ${"─".repeat(72)}`);
 
   const displayTeams = [
@@ -301,12 +301,12 @@ async function checkBValues() {
     const last = dates[dates.length - 1]?.slice(0, 10) ?? "—";
 
     console.log(
-      `  ${team.team_id.padEnd(28)} ${Number(team.B_value).toFixed(2).padStart(10)} ${validSettlements.length.toString().padStart(8)} ${first.padStart(12)} ${last.padStart(12)}`
+      `  ${team.team_id.padEnd(28)} ${Number(team.b_value).toFixed(2).padStart(10)} ${validSettlements.length.toString().padStart(8)} ${first.padStart(12)} ${last.padStart(12)}`
     );
 
     // Check: B=0 but has settlements with real deltas
-    if (Number(team.B_value) === 0 && validSettlements.length > 0) {
-      const totalDelta = validSettlements.reduce((s, v) => s + Number(v.delta_B), 0);
+    if (Number(team.b_value) === 0 && validSettlements.length > 0) {
+      const totalDelta = validSettlements.reduce((s, v) => s + Number(v.delta_b), 0);
       if (Math.abs(totalDelta) > 0.01) {
         zeroWithSettlements++;
         issues.push(`${team.team_id}: B=0 but ${validSettlements.length} settlements (sum ΔB=${totalDelta.toFixed(2)})`);
@@ -315,9 +315,9 @@ async function checkBValues() {
 
     // Check: any single delta_B exceeding ±25
     for (const s of validSettlements) {
-      if (Math.abs(Number(s.delta_B)) > 25) {
+      if (Math.abs(Number(s.delta_b)) > 25) {
         largeDeltas++;
-        issues.push(`${team.team_id}: large ΔB=${Number(s.delta_B).toFixed(2)} in a single settlement`);
+        issues.push(`${team.team_id}: large ΔB=${Number(s.delta_b).toFixed(2)} in a single settlement`);
       }
     }
   }
@@ -351,7 +351,7 @@ async function checkReproducibility() {
   // Get 5 most recently settled fixtures that have a valid trace
   const { data: recentSettlements, error: recentErr } = await sb
     .from("settlement_log")
-    .select("settlement_id, fixture_id, team_id, E_KR, actual_score_S, delta_B, trace_payload")
+    .select("settlement_id, fixture_id, team_id, e_kr, actual_score_s, delta_b, trace_payload")
     .not("trace_payload->>error", "is", null as unknown as string)  // skip failures... actually we want non-failures
     .order("settled_at", { ascending: false })
     .limit(50);
@@ -366,9 +366,9 @@ async function checkReproducibility() {
     settlement_id: number;
     fixture_id: number;
     team_id: string;
-    E_KR: number;
-    actual_score_S: number;
-    delta_B: number;
+    e_kr: number;
+    actual_score_s: number;
+    delta_b: number;
     trace_payload: Record<string, unknown> | null;
   }[]).filter(s => s.trace_payload && !s.trace_payload.error);
 
@@ -422,9 +422,9 @@ async function checkReproducibility() {
       E_KR_recomputed = recomputedAwayProb + 0.5 * recomputedDrawProb;
     }
 
-    const delta_B_recomputed = K * (Number(s.actual_score_S) - E_KR_recomputed);
+    const delta_B_recomputed = K * (Number(s.actual_score_s) - E_KR_recomputed);
 
-    const storedDelta = Number(s.delta_B);
+    const storedDelta = Number(s.delta_b);
     const diff = Math.abs(delta_B_recomputed - storedDelta);
     const match = diff < 0.001; // allow tiny floating point difference
 
@@ -461,13 +461,13 @@ async function checkM1Health() {
   // Load all team_oracle_state rows
   const teamStates = await fetchAll<{
     team_id: string;
-    B_value: number;
-    M1_value: number;
+    b_value: number;
+    m1_value: number;
     published_index: number;
     confidence_score: number | null;
     next_fixture_id: number | null;
     last_market_refresh_ts: string | null;
-  }>("team_oracle_state", "team_id, B_value, M1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts");
+  }>("team_oracle_state", "team_id, b_value, m1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts");
 
   if (teamStates.length === 0) {
     console.log("\n  ⚠️  WARN — No teams in team_oracle_state. Run settlement + M1 refresh first.");
@@ -516,8 +516,8 @@ async function checkM1Health() {
       continue;
     }
 
-    const B = Number(team.B_value);
-    const M1 = Number(team.M1_value);
+    const B = Number(team.b_value);
+    const M1 = Number(team.m1_value);
     const idx = Number(team.published_index);
     const conf = team.confidence_score != null ? Number(team.confidence_score) : null;
     const refreshTs = team.last_market_refresh_ts
@@ -560,7 +560,7 @@ async function checkM1Health() {
 
   if (indexMismatch > 0) {
     allPassed = false;
-    console.log(`  ❌ FAIL — ${indexMismatch} teams have published_index ≠ B_value + M1_value (write bug)`);
+    console.log(`  ❌ FAIL — ${indexMismatch} teams have published_index ≠ b_value + m1_value (write bug)`);
   }
   if (staleRefresh > 0) {
     allPassed = false;
@@ -585,12 +585,12 @@ async function checkCycleHealth() {
   // Load all team_oracle_state rows with updated_at + live match data
   const teamStates = await fetchAll<{
     team_id: string;
-    B_value: number;
-    M1_value: number;
+    b_value: number;
+    m1_value: number;
     published_index: number;
     updated_at: string;
     last_market_refresh_ts: string | null;
-  }>("team_oracle_state", "team_id, B_value, M1_value, published_index, updated_at, last_market_refresh_ts");
+  }>("team_oracle_state", "team_id, b_value, m1_value, published_index, updated_at, last_market_refresh_ts");
 
   if (teamStates.length === 0) {
     console.log("\n  ⚠️  WARN — No teams in team_oracle_state. Oracle V1 cycle has not run yet.");
@@ -639,7 +639,7 @@ async function checkCycleHealth() {
 
   // Teams where published_index = B_value exactly (M1 effectively zero)
   const noM1Teams = teamStates.filter(
-    t => Math.abs(Number(t.published_index) - Number(t.B_value)) < 0.001
+    t => Math.abs(Number(t.published_index) - Number(t.b_value)) < 0.001
   );
 
   console.log(`\n  Teams with M1 = 0 (index = B): ${noM1Teams.length}/${teamStates.length}`);
@@ -688,12 +688,12 @@ async function checkPriceHistory() {
     team: string;
     league: string;
     timestamp: string;
-    B_value: number;
-    M1_value: number;
+    b_value: number;
+    m1_value: number;
     published_index: number;
     publish_reason: string;
     source_fixture_id: number | null;
-  }>("oracle_price_history", "team, league, timestamp, B_value, M1_value, published_index, publish_reason, source_fixture_id");
+  }>("oracle_price_history", "team, league, timestamp, b_value, m1_value, published_index, publish_reason, source_fixture_id");
 
   if (priceHistory.length === 0) {
     console.log("\n  ⚠️  WARN — No rows in oracle_price_history. Settlement or bootstrap hasn't run yet.");
@@ -739,7 +739,7 @@ async function checkPriceHistory() {
   // Check: B_value + M1_value should equal published_index
   let indexMismatch = 0;
   for (const row of priceHistory) {
-    const expected = Number(row.B_value) + Number(row.M1_value);
+    const expected = Number(row.b_value) + Number(row.m1_value);
     if (Math.abs(Number(row.published_index) - expected) > 0.01) {
       indexMismatch++;
     }
@@ -759,7 +759,7 @@ async function checkPriceHistory() {
 
   if (indexMismatch > 0) {
     allPassed = false;
-    console.log(`  ❌ FAIL — ${indexMismatch} price history rows have published_index ≠ B_value + M1_value`);
+    console.log(`  ❌ FAIL — ${indexMismatch} price history rows have published_index ≠ b_value + m1_value`);
   }
 
   if (allPassed) {
