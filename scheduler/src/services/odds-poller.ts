@@ -192,7 +192,31 @@ export async function pollOdds(
       let fixtureId = matchEventToFixture(event, lookup);
 
       if (fixtureId === null) {
-        // Try creating a new fixture row
+        // Fallback: direct DB lookup by resolved names + date before creating synthetic row.
+        // This catches cases where match-tracker has already created the real row but
+        // the in-memory lookup hasn't been refreshed yet (common for newly ingested matches).
+        const resolvedH = resolveOddsApiName(event.home_team);
+        const resolvedA = resolveOddsApiName(event.away_team);
+        const eventDate = event.commence_time.slice(0, 10);
+
+        const { data: dbMatch } = await getSupabase()
+          .from("matches")
+          .select("fixture_id")
+          .eq("date", eventDate)
+          .eq("home_team", resolvedH)
+          .eq("away_team", resolvedA)
+          .lt("fixture_id", 9000000)
+          .limit(1)
+          .maybeSingle();
+
+        if (dbMatch) {
+          fixtureId = dbMatch.fixture_id;
+          log.debug(`DB fallback matched: ${resolvedH} vs ${resolvedA} → fid=${fixtureId}`);
+        }
+      }
+
+      if (fixtureId === null) {
+        // Last resort: create a synthetic fixture row
         fixtureId = await createFixtureFromEvent(event, lookup);
         if (fixtureId !== null) {
           createdFixtures++;
