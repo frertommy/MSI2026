@@ -44,10 +44,10 @@ export const POLL_INTERVALS = {
   POST_KICKOFF: 10 * 60 * 1000, //  10 min  (0-2h after)
 } as const;
 
-// ─── Credit limits ───────────────────────────────────────────
-export const CREDITS_DAILY_SOFT_LIMIT = 450; // reserve 50 for manual
-export const CREDITS_PER_LEAGUE_CALL = 3; // h2h + totals + spreads = 3 credits
-export const CREDITS_FALLBACK_INTERVAL = 60 * 60 * 1000; // hourly when low
+// ─── Credit limits (Mega plan: 5M credits/month) ────────────
+export const CREDITS_DAILY_SOFT_LIMIT = 25_000;              // 1-min full markets ≈ 21,600/day + headroom
+export const CREDITS_PER_LEAGUE_CALL = 3;                    // h2h + totals + spreads = 3 credits
+export const CREDITS_FALLBACK_INTERVAL = 5 * 60 * 1000;     // 5 min fallback when credits low
 
 // ─── Pricing engine constants (MeasureMe-validated) ──────────
 export const INITIAL_ELO = 1500;
@@ -61,7 +61,7 @@ export const MA_WINDOW = 45;                     // moving average window for ca
 export const LIVE_SHOCK_DISCOUNT = 0.5;           // discount factor for in-play shocks
 export const BATCH_SIZE = 500;
 
-// ─── Outright futures mapping (disabled but kept for odds-client) ──
+// ─── Outright futures mapping (polled every 6h for M₂ layer) ──
 export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Premier League": "soccer_epl_winner",
   "La Liga": "soccer_spain_la_liga_winner",
@@ -71,9 +71,10 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
 };
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
-// ─── Hourly baseline polling ─────────────────────────────────
-export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour
-export const DAILY_CREDIT_SAFETY = 400;              // switch to hourly-only above this
+// ─── Primary polling interval ────────────────────────────────
+export const PRIMARY_POLL_INTERVAL = 60 * 1000;      // 1 minute — all leagues, all markets, 24/7
+export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000;  // legacy — only used by sub-pollers (Polymarket etc.)
+export const DAILY_CREDIT_SAFETY = 22_000;            // fallback to 5-min if exceeded
 
 // ─── Polymarket data collection (analytics only, no pricing) ─
 export const POLYMARKET_SERIES_IDS: Record<string, string> = {
@@ -98,7 +99,17 @@ export const XG_POLL_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
 export const XG_FLOOR = 0.4;                         // min shock multiplier (lucky win)
 export const XG_CEILING = 1.8;                       // max shock multiplier (dominant win)
 
-// ─── Odds blend constants (Phase 2) ─────────────────────────
+// ─── Oracle V1 constants ─────────────────────────────────────
+export const ORACLE_V1_K = 30;         // Fixed K-factor for B-layer settlement: ΔB = 30 × (S − E_KR)
+export const ORACLE_V1_BASELINE_ELO = 1500;  // Bootstrap B_value for new teams (league-neutral in v1)
+
+// Feature flags — default OFF, zero behavior change until explicitly enabled
+export const ORACLE_V1_ENABLED =
+  process.env.ORACLE_V1_ENABLED === "true";           // Master switch: run settlement + M1 cycle
+export const ORACLE_V1_PUBLISH_ENABLED =
+  process.env.ORACLE_V1_PUBLISH_ENABLED === "true";   // Future: gate published_index writes (currently unused)
+
+// ─── Odds blend constants (Phase 2 — legacy) ────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend
 export const PREMATCH_WEIGHT = 0.30;   // Blend weight: (1-w)*matchElo + w*oddsImplied (MeasureMe winner)
 export const LIVE_WEIGHT = 0.75;       // Blend weight during live matches (heavier than prematch)

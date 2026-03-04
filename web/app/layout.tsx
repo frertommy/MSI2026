@@ -29,17 +29,32 @@ export default function RootLayout({
               MSI 2026
             </a>
             <div className="flex items-center gap-4 ml-auto">
+              {/* Primary nav */}
               {[
                 { href: "/", label: "Rankings" },
-                { href: "/matches", label: "Matches" },
-                { href: "/v3", label: "Simulation" },
                 { href: "/oracle", label: "Oracle" },
-                { href: "/measureme", label: "MeasureMe" },
               ].map((link) => (
                 <a
                   key={link.href}
                   href={link.href}
                   className="text-xs text-muted hover:text-accent-green transition-colors font-mono uppercase tracking-wider"
+                >
+                  {link.label}
+                </a>
+              ))}
+              {/* Old pages */}
+              <span className="text-xs text-muted/50 font-mono">|</span>
+              {[
+                { href: "/old/oracle", label: "Old Oracle" },
+                { href: "/old/matches", label: "Matches" },
+                { href: "/old/v3", label: "Simulation" },
+                { href: "/old/compare", label: "Compare" },
+                { href: "/old/measureme", label: "MeasureMe" },
+              ].map((link) => (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="text-xs text-muted/60 hover:text-muted transition-colors font-mono uppercase tracking-wider"
                 >
                   {link.label}
                 </a>

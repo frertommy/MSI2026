@@ -1,29 +1,41 @@
 import { supabase } from "@/lib/supabase";
-import { OracleClient } from "./oracle-client";
+import { OracleV1Client } from "./oracle-v1-client";
 
-// ─── Types ─────────────────────────────────────────────────
-export interface OraclePriceRow {
-  team: string;
-  league: string;
-  date: string;
-  dollar_price: number;
-  ema_dollar_price: number | null;
-  implied_elo: number;
+// ─── Types (shared with client) ─────────────────────────────
+export interface TeamOracleRow {
+  team_id: string;
+  season: string | null;
+  B_value: number;
+  M1_value: number;
+  published_index: number;
+  confidence_score: number | null;
+  next_fixture_id: number | null;
+  last_market_refresh_ts: string | null;
+  updated_at: string;
 }
 
-export interface MatchInfo {
+export interface SettlementRow {
+  settlement_id: number;
+  fixture_id: number;
+  team_id: string;
+  E_KR: number;
+  actual_score_S: number;
+  delta_B: number;
+  B_before: number;
+  B_after: number;
+  settled_at: string;
+  trace_payload: Record<string, unknown> | null;
+}
+
+export interface MatchRow {
   fixture_id: number;
   date: string;
   league: string;
   home_team: string;
   away_team: string;
   score: string;
-}
-
-export interface PmPrice {
-  team: string;
-  impliedPrice: number;
-  impliedProb: number;
+  status: string;
+  commence_time: string | null;
 }
 
 export const dynamic = "force-dynamic";
@@ -33,7 +45,8 @@ async function fetchAll<T>(
   table: string,
   select: string,
   filters?: Record<string, string | number>,
-  orderCol?: string
+  orderCol?: string,
+  ascending = true
 ): Promise<T[]> {
   const all: T[] = [];
   let from = 0;
@@ -43,7 +56,7 @@ async function fetchAll<T>(
     if (filters) {
       for (const [k, v] of Object.entries(filters)) q = q.eq(k, v);
     }
-    if (orderCol) q = q.order(orderCol, { ascending: true });
+    if (orderCol) q = q.order(orderCol, { ascending });
     const { data, error } = await q;
     if (error) {
       console.error(`${table} fetch error:`, error.message);
@@ -57,72 +70,33 @@ async function fetchAll<T>(
   return all;
 }
 
-// ─── Polymarket implied price computation ───────────────────
-const N_PER_LEAGUE: Record<string, number> = {
-  "Premier League": 20,
-  "La Liga": 20,
-  Bundesliga: 18,
-  "Serie A": 20,
-  "Ligue 1": 18,
-};
-
-function computePmPrices(
-  pmRaw: { league: string; team: string; implied_prob: number; snapshot_time: string }[]
-): PmPrice[] {
-  // Dedupe: keep latest per team (data is sorted DESC by snapshot_time)
-  const pmByTeam = new Map<string, { implied_prob: number; league: string }>();
-  for (const r of pmRaw) {
-    if (!pmByTeam.has(r.team)) {
-      pmByTeam.set(r.team, { implied_prob: r.implied_prob, league: r.league });
-    }
-  }
-
-  const prices: PmPrice[] = [];
-  for (const [team, data] of pmByTeam) {
-    if (data.implied_prob <= 0) continue;
-    const N = N_PER_LEAGUE[data.league] ?? 20;
-    const baselineProb = 1 / N;
-    const impliedElo = 1500 + 400 * Math.log10(data.implied_prob / baselineProb);
-    const impliedPrice = Math.max(10, (impliedElo - 1000) / 5);
-    prices.push({
-      team,
-      impliedPrice: Math.round(impliedPrice * 100) / 100,
-      impliedProb: data.implied_prob,
-    });
-  }
-  return prices;
-}
-
 // ─── Server component ──────────────────────────────────────
-export default async function OraclePage() {
-  const [priceHistory, matches, pmRawResult] = await Promise.all([
-    fetchAll<OraclePriceRow>(
-      "team_prices",
-      "team, league, date, dollar_price, ema_dollar_price, implied_elo",
-      { model: "oracle" },
-      "date"
+export default async function OracleV1Page() {
+  const [teamStates, settlements, matches] = await Promise.all([
+    fetchAll<TeamOracleRow>(
+      "team_oracle_state",
+      "team_id, season, B_value, M1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts, updated_at"
     ),
-    fetchAll<MatchInfo>(
-      "matches",
-      "fixture_id, date, league, home_team, away_team, score",
+    fetchAll<SettlementRow>(
+      "settlement_log",
+      "settlement_id, fixture_id, team_id, E_KR, actual_score_S, delta_B, B_before, B_after, settled_at, trace_payload",
       undefined,
-      "date"
+      "settled_at",
+      false // most recent first
     ),
-    supabase
-      .from("polymarket_futures")
-      .select("league, team, implied_prob, snapshot_time")
-      .order("snapshot_time", { ascending: false }),
+    fetchAll<MatchRow>(
+      "matches",
+      "fixture_id, date, league, home_team, away_team, score, status, commence_time",
+      undefined,
+      "date",
+      true
+    ),
   ]);
 
-  const pmPrices = computePmPrices(
-    (pmRawResult.data ?? []) as { league: string; team: string; implied_prob: number; snapshot_time: string }[]
-  );
-
-  // Determine date range
-  const dates = priceHistory.map((r) => r.date);
-  const minDate = dates.length > 0 ? dates[0] : "—";
-  const maxDate = dates.length > 0 ? dates[dates.length - 1] : "—";
-  const teams = new Set(priceHistory.map((r) => r.team));
+  const teamCount = teamStates.length;
+  const settlementCount = settlements.filter(
+    (s) => !s.trace_payload || !s.trace_payload.error
+  ).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -130,16 +104,31 @@ export default async function OraclePage() {
         <div className="mx-auto max-w-7xl flex items-center gap-4">
           <div className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />
           <h1 className="text-lg font-bold tracking-wider text-foreground uppercase">
-            Oracle Pricing
+            Oracle V1
           </h1>
           <span className="text-xs text-muted font-mono ml-auto">
-            {teams.size} teams &middot; {minDate} → {maxDate} &middot;{" "}
-            {matches.filter((m) => m.score && m.score.includes("-")).length} matches
+            {teamCount} teams &middot; {settlementCount} settlements
           </span>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
-        <OracleClient priceHistory={priceHistory} matches={matches} pmPrices={pmPrices} />
+        {teamCount === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="text-muted text-sm font-mono mb-2">
+              Oracle v1 not yet active
+            </div>
+            <div className="text-muted/60 text-xs font-mono max-w-md">
+              Set ORACLE_V1_ENABLED=true in your environment to start the settlement + M1 cycle.
+              Team data will appear here once the first matches are settled.
+            </div>
+          </div>
+        ) : (
+          <OracleV1Client
+            teamStates={teamStates}
+            settlements={settlements}
+            matches={matches}
+          />
+        )}
       </main>
     </div>
   );

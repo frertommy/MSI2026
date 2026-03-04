@@ -56,9 +56,8 @@ async function fetchSportOdds(
 
 /**
  * Fetch live odds for all 5 leagues.
- * Markets are selected based on remaining credits:
- *   - creditsRemaining < 100 → h2h only (1 credit/league)
- *   - otherwise → h2h,totals,spreads (3 credits/league)
+ * Always fetches h2h + totals + spreads (3 credits/league = 15 credits/poll).
+ * Mega plan: 5M credits/month — no need to degrade.
  * 1-second delay between calls to avoid rate limits.
  */
 export async function fetchAllLeagueOdds(
@@ -69,12 +68,8 @@ export async function fetchAllLeagueOdds(
   creditsRemaining: number | null;
   marketsUsed: string;
 }> {
-  // Choose markets based on credit budget
-  const markets =
-    creditsRemaining !== null && creditsRemaining < 100
-      ? "h2h"
-      : "h2h,totals,spreads";
-  const creditCost = markets.split(",").length;
+  const markets = "h2h,totals,spreads";
+  const creditCost = 3;
 
   log.info(`Odds poll: markets=${markets} (${creditCost} credits/league)`);
 

@@ -540,7 +540,7 @@ export default async function V3Page() {
           </h1>
           <div className="flex items-center gap-4 ml-auto">
             <a
-              href="/matches"
+              href="/old/matches"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
               Matches &rarr;
@@ -558,7 +558,7 @@ export default async function V3Page() {
               V2 Pricing &rarr;
             </a>
             <a
-              href="/measureme"
+              href="/old/measureme"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
               MeasureMe &rarr;

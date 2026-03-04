@@ -149,7 +149,7 @@ export default async function MeasureMePage() {
           </h1>
           <div className="flex items-center gap-4 ml-auto">
             <a
-              href="/v3"
+              href="/old/v3"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
               Simulation &rarr;

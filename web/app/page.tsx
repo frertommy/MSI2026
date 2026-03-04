@@ -176,13 +176,13 @@ export default async function Home() {
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="/measureme"
+              href="/old/measureme"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
               MeasureMe &rarr;
             </a>
             <a
-              href="/v3"
+              href="/old/v3"
               className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
             >
               Simulation &rarr;

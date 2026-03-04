@@ -33,11 +33,11 @@ export class CreditTracker {
     }
   }
 
-  /** Can we afford another poll cycle? (5 credits for 5 leagues) */
+  /** Can we afford another poll cycle? (15 credits for 5 leagues × 3 markets) */
   canPoll(): boolean {
     this.checkReset();
-    // Check our soft daily limit
-    if (this.usedToday + 5 > CREDITS_DAILY_SOFT_LIMIT) {
+    // Check our soft daily limit (Mega plan: 25k/day budget)
+    if (this.usedToday + 15 > CREDITS_DAILY_SOFT_LIMIT) {
       log.warn(`Daily credit soft limit reached: ${this.usedToday}/${CREDITS_DAILY_SOFT_LIMIT}`);
       return false;
     }

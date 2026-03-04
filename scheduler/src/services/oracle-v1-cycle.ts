@@ -1,0 +1,424 @@
+/**
+ * oracle-v1-cycle.ts — Main orchestration cycle for the V1 Oracle.
+ *
+ * Exports one function: runOracleV1Cycle()
+ *
+ * Called once per scheduler poll (every ~1 min) when ORACLE_V1_ENABLED=true.
+ *
+ * Steps:
+ *   1. Settle any newly-finished matches (sequential, idempotent)
+ *   2. Identify frozen teams (currently mid-match)
+ *   3. Refresh M1 for all non-frozen teams (parallel, max concurrency 5)
+ *   4. Log cycle summary
+ *
+ * Constraints:
+ *   - Frozen teams NEVER have published_index updated during this cycle
+ *   - Settlement is sequential to avoid race conditions on B_value
+ *   - M1 refreshes are parallel (capped) since they're independent per team
+ *   - No imports from pricing-engine.ts
+ *   - Feature-flagged: does nothing if ORACLE_V1_ENABLED is false
+ */
+
+import { getSupabase } from "../api/supabase-client.js";
+import { settleFixture } from "./oracle-v1-settlement.js";
+import { refreshM1 } from "./oracle-v1-market.js";
+import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO } from "../config.js";
+import { log } from "../logger.js";
+
+// ─── Types ──────────────────────────────────────────────────
+
+interface CycleResult {
+  ran: boolean;
+  skipped_reason?: string;
+  settled_count: number;
+  settled_errors: number;
+  m1_refreshed: number;
+  m1_skipped: number;
+  m1_errors: number;
+  frozen_teams: string[];
+  elapsed_ms: number;
+}
+
+// ─── Constants ──────────────────────────────────────────────
+
+/** Maximum concurrent M1 refreshes to avoid hammering Supabase */
+const M1_CONCURRENCY = 5;
+
+// ─── Concurrency helper ─────────────────────────────────────
+
+/**
+ * Run async tasks with a concurrency limit.
+ * Returns results in the same order as the input.
+ */
+async function parallelLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+// ─── Main cycle ─────────────────────────────────────────────
+
+/**
+ * Run one full V1 Oracle cycle: settle + freeze + refresh M1.
+ *
+ * Safe to call every poll — gated by ORACLE_V1_ENABLED.
+ * Idempotent: settlement checks settlement_log, M1 skips live teams.
+ */
+export async function runOracleV1Cycle(): Promise<CycleResult> {
+  const cycleStart = Date.now();
+
+  // ── Guard: feature flag ────────────────────────────────────
+  if (!ORACLE_V1_ENABLED) {
+    return {
+      ran: false,
+      skipped_reason: "oracle_v1_disabled",
+      settled_count: 0,
+      settled_errors: 0,
+      m1_refreshed: 0,
+      m1_skipped: 0,
+      m1_errors: 0,
+      frozen_teams: [],
+      elapsed_ms: 0,
+    };
+  }
+
+  const sb = getSupabase();
+
+  log.info("Oracle V1 cycle starting...");
+
+  // ── Step 1: Settle newly-finished matches ──────────────────
+  // Query all finished matches, then left-join settlement_log to find
+  // fixtures with < 2 entries (need both home + away settled).
+  // This replaces the old "last 200 finished" approach — we now scan ALL
+  // finished matches so no fixture is ever missed.
+
+  const finishedMatches = await fetchAllFinished(sb);
+
+  if (finishedMatches === null) {
+    log.error("Oracle V1 cycle: finished matches query failed");
+    return {
+      ran: true,
+      settled_count: 0,
+      settled_errors: 1,
+      m1_refreshed: 0,
+      m1_skipped: 0,
+      m1_errors: 0,
+      frozen_teams: [],
+      elapsed_ms: Date.now() - cycleStart,
+    };
+  }
+
+  const finishedIds = finishedMatches.map(m => m.fixture_id);
+
+  let unsettledFixtures: number[] = [];
+
+  if (finishedIds.length > 0) {
+    // Load all settlement_log entries for finished fixtures (paginated)
+    const settledRows = await fetchAllSettlementEntries(sb, finishedIds);
+
+    if (settledRows !== null) {
+      // Count settlements per fixture
+      const countByFixture = new Map<number, number>();
+      for (const row of settledRows) {
+        countByFixture.set(row.fixture_id, (countByFixture.get(row.fixture_id) ?? 0) + 1);
+      }
+
+      // Unsettled = < 2 entries (need both home + away)
+      unsettledFixtures = finishedIds.filter(fid => (countByFixture.get(fid) ?? 0) < 2);
+    }
+  }
+
+  let settledCount = 0;
+  let settledErrors = 0;
+
+  // Settle sequentially to avoid B_value race conditions
+  for (const fixtureId of unsettledFixtures) {
+    try {
+      const result = await settleFixture(fixtureId);
+      if (result.settled) {
+        settledCount++;
+      }
+    } catch (err) {
+      settledErrors++;
+      log.error(
+        `Oracle V1 cycle: settlement failed for fixture ${fixtureId}: ` +
+        (err instanceof Error ? err.message : String(err))
+      );
+    }
+  }
+
+  if (settledCount > 0 || settledErrors > 0) {
+    log.info(
+      `Oracle V1 settlement: ${settledCount} settled, ${settledErrors} errors, ` +
+      `${unsettledFixtures.length - settledCount - settledErrors} skipped`
+    );
+  }
+
+  // ── Step 2: Identify frozen teams (mid-match) ─────────────
+  const { data: liveMatches, error: liveErr } = await sb
+    .from("matches")
+    .select("fixture_id, home_team, away_team")
+    .eq("status", "live");
+
+  const frozenTeams = new Set<string>();
+  if (liveErr) {
+    log.warn(`Oracle V1 cycle: live match query failed: ${liveErr.message}`);
+  } else {
+    for (const m of (liveMatches ?? [])) {
+      frozenTeams.add(m.home_team);
+      frozenTeams.add(m.away_team);
+    }
+  }
+
+  // ── Step 3: Refresh M1 for all non-frozen teams ───────────
+  // Get all distinct teams from team_oracle_state
+  const { data: allTeamRows, error: teamErr } = await sb
+    .from("team_oracle_state")
+    .select("team_id");
+
+  if (teamErr) {
+    log.error(`Oracle V1 cycle: team_oracle_state query failed: ${teamErr.message}`);
+    return {
+      ran: true,
+      settled_count: settledCount,
+      settled_errors: settledErrors,
+      m1_refreshed: 0,
+      m1_skipped: 0,
+      m1_errors: 0,
+      frozen_teams: [...frozenTeams],
+      elapsed_ms: Date.now() - cycleStart,
+    };
+  }
+
+  const existingTeams = new Set((allTeamRows ?? []).map(r => r.team_id as string));
+
+  // ── Inline bootstrap: ensure every team in `matches` has a row ────
+  // Load all distinct teams from matches, bootstrap any missing ones.
+  const allMatchTeams = await fetchAllDistinctTeams(sb);
+  let bootstrapCount = 0;
+
+  if (allMatchTeams) {
+    const missingTeams = allMatchTeams.filter(t => !existingTeams.has(t.team) && !frozenTeams.has(t.team));
+
+    if (missingTeams.length > 0) {
+      const now = new Date().toISOString();
+      const season = deriveSeason(new Date().toISOString().slice(0, 10));
+      const bootstrapRows = missingTeams.map(t => ({
+        team_id: t.team,
+        season,
+        B_value: ORACLE_V1_BASELINE_ELO,
+        M1_value: 0,
+        published_index: ORACLE_V1_BASELINE_ELO,
+        confidence_score: 0,
+        next_fixture_id: null,
+        last_kr_fixture_id: null,
+        last_market_refresh_ts: null,
+        updated_at: now,
+      }));
+
+      const { error: bsErr } = await sb
+        .from("team_oracle_state")
+        .upsert(bootstrapRows, { onConflict: "team_id" });
+
+      if (bsErr) {
+        log.warn(`Oracle V1 cycle: inline bootstrap failed: ${bsErr.message}`);
+      } else {
+        bootstrapCount = missingTeams.length;
+        // Also write price history for bootstrapped teams
+        const phRows = missingTeams.map(t => ({
+          team: t.team,
+          league: t.league,
+          timestamp: now,
+          B_value: ORACLE_V1_BASELINE_ELO,
+          M1_value: 0,
+          published_index: ORACLE_V1_BASELINE_ELO,
+          confidence_score: 0,
+          source_fixture_id: null,
+          publish_reason: "bootstrap",
+        }));
+
+        const { error: phErr } = await sb
+          .from("oracle_price_history")
+          .insert(phRows);
+
+        if (phErr) {
+          log.warn(`Oracle V1 cycle: bootstrap price history insert failed: ${phErr.message}`);
+        }
+
+        log.info(`Oracle V1 cycle: bootstrapped ${bootstrapCount} new teams at B=${ORACLE_V1_BASELINE_ELO}`);
+
+        // Add to existing set so they get M1 refreshed this cycle
+        for (const t of missingTeams) {
+          existingTeams.add(t.team);
+        }
+      }
+    }
+  }
+
+  const allTeams = [...existingTeams];
+  const teamsToRefresh = allTeams.filter(t => !frozenTeams.has(t));
+  const m1Skipped = allTeams.length - teamsToRefresh.length;
+
+  let m1Refreshed = 0;
+  let m1Errors = 0;
+
+  // Parallel M1 refresh with concurrency limit
+  if (teamsToRefresh.length > 0) {
+    const results = await parallelLimit(
+      teamsToRefresh,
+      M1_CONCURRENCY,
+      async (team: string) => {
+        try {
+          const result = await refreshM1(team);
+          return { team, result, error: null };
+        } catch (err) {
+          return { team, result: null, error: err };
+        }
+      }
+    );
+
+    for (const r of results) {
+      if (r.error) {
+        m1Errors++;
+        log.error(
+          `Oracle V1 cycle: M1 refresh failed for ${r.team}: ` +
+          (r.error instanceof Error ? r.error.message : String(r.error))
+        );
+      } else if (r.result?.updated) {
+        m1Refreshed++;
+      }
+    }
+  }
+
+  // ── Step 4: Log cycle summary ─────────────────────────────
+  const elapsed = Date.now() - cycleStart;
+
+  log.info(
+    `Oracle V1 cycle complete in ${(elapsed / 1000).toFixed(1)}s — ` +
+    `settled=${settledCount} bootstrapped=${bootstrapCount} M1=${m1Refreshed}/${teamsToRefresh.length} ` +
+    `frozen=${frozenTeams.size} errors=${settledErrors + m1Errors}`
+  );
+
+  return {
+    ran: true,
+    settled_count: settledCount,
+    settled_errors: settledErrors,
+    m1_refreshed: m1Refreshed,
+    m1_skipped: m1Skipped,
+    m1_errors: m1Errors,
+    frozen_teams: [...frozenTeams],
+    elapsed_ms: elapsed,
+  };
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+function deriveSeason(date: string): string {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  if (month >= 7) return `${year}-${(year + 1).toString().slice(2)}`;
+  return `${year - 1}-${year.toString().slice(2)}`;
+}
+
+/** Fetch ALL finished matches (paginated). Returns null on error. */
+async function fetchAllFinished(
+  sb: ReturnType<typeof getSupabase>
+): Promise<{ fixture_id: number; home_team: string; away_team: string; score: string; date: string }[] | null> {
+  const all: { fixture_id: number; home_team: string; away_team: string; score: string; date: string }[] = [];
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await sb
+      .from("matches")
+      .select("fixture_id, home_team, away_team, score, date")
+      .eq("status", "finished")
+      .order("date", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      log.error(`fetchAllFinished: ${error.message}`);
+      return null;
+    }
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
+/** Fetch settlement_log entries for a set of fixture IDs (paginated, batched). */
+async function fetchAllSettlementEntries(
+  sb: ReturnType<typeof getSupabase>,
+  fixtureIds: number[]
+): Promise<{ fixture_id: number; team_id: string }[] | null> {
+  const all: { fixture_id: number; team_id: string }[] = [];
+
+  // Supabase `.in()` has a practical limit — batch in chunks of 500
+  const chunkSize = 500;
+  for (let i = 0; i < fixtureIds.length; i += chunkSize) {
+    const chunk = fixtureIds.slice(i, i + chunkSize);
+
+    const { data, error } = await sb
+      .from("settlement_log")
+      .select("fixture_id, team_id")
+      .in("fixture_id", chunk);
+
+    if (error) {
+      log.error(`fetchAllSettlementEntries: ${error.message}`);
+      return null;
+    }
+    if (data) all.push(...data);
+  }
+  return all;
+}
+
+/** Fetch all distinct teams from matches table with their league. */
+async function fetchAllDistinctTeams(
+  sb: ReturnType<typeof getSupabase>
+): Promise<{ team: string; league: string }[] | null> {
+  const teamMap = new Map<string, string>();
+  let from = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await sb
+      .from("matches")
+      .select("home_team, away_team, league")
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      log.error(`fetchAllDistinctTeams: ${error.message}`);
+      return null;
+    }
+    if (!data || data.length === 0) break;
+
+    for (const m of data) {
+      if (!teamMap.has(m.home_team)) teamMap.set(m.home_team, m.league);
+      if (!teamMap.has(m.away_team)) teamMap.set(m.away_team, m.league);
+    }
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return [...teamMap.entries()].map(([team, league]) => ({ team, league }));
+}

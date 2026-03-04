@@ -120,7 +120,7 @@ export function TeamTable({
             {ranked.map((t) => (
               <tr
                 key={t.team}
-                onClick={() => router.push(`/compare?team=${encodeURIComponent(t.team)}`)}
+                onClick={() => router.push(`/old/compare?team=${encodeURIComponent(t.team)}`)}
                 className="border-b border-border/50 hover:bg-surface-hover cursor-pointer transition-colors group"
               >
                 <td className="py-2 pr-3 text-right font-mono text-muted">
