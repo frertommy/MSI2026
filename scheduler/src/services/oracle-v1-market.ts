@@ -101,7 +101,8 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     .select("fixture_id, date, home_team, away_team, commence_time")
     .or(`home_team.eq.${team},away_team.eq.${team}`)
     .eq("status", "upcoming")
-    .order("commence_time", { ascending: true })
+    .order("date", { ascending: true })
+    .order("commence_time", { ascending: true, nullsFirst: true })
     .limit(1);
 
   if (nextErr) {
