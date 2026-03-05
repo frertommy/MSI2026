@@ -5,8 +5,6 @@ import {
   OUTRIGHT_POLL_INTERVAL,
   DAILY_CREDIT_SAFETY,
   POLYMARKET_POLL_INTERVAL,
-  XG_ENABLED,
-  XG_POLL_INTERVAL,
   ORACLE_V1_ENABLED,
 } from "./config.js";
 import { log } from "./logger.js";
@@ -19,8 +17,6 @@ import {
   matchPolymarketToFixtures,
 } from "./services/polymarket-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
-import { runPricingEngine } from "./services/pricing-engine.js";
-import { pollUnderstatXg } from "./services/understat-poller.js";
 import { CreditTracker } from "./services/credit-tracker.js";
 import { runOracleV1Cycle } from "./services/oracle-v1-cycle.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
@@ -37,7 +33,6 @@ export class Scheduler {
   private lastOutrightPoll = 0;
   private lastHourlyPoll = 0;
   private lastPolymarketPoll = 0;
-  private lastUnderstatPoll = 0;
 
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
@@ -95,7 +90,6 @@ export class Scheduler {
       // 1. Check credits
       if (!this.creditTracker.canPoll()) {
         log.warn("Skipping odds poll — credit limit reached");
-        // Still run pricing on existing data
       } else {
         // 2. Poll odds (h2h + totals + spreads, all 5 leagues)
         this.lastPollResult = await pollOdds(this.lookup!, this.creditTracker);
@@ -145,37 +139,12 @@ export class Scheduler {
         this.lookup = await buildTeamLookup();
       }
 
-      // 3b. Poll Understat xG (every 4 hours — free, no auth)
-      if (
-        XG_ENABLED &&
-        Date.now() - this.lastUnderstatPoll >= XG_POLL_INTERVAL
-      ) {
-        try {
-          await pollUnderstatXg();
-          this.lastUnderstatPoll = Date.now();
-        } catch (err) {
-          log.warn(
-            "Understat xG poll failed",
-            err instanceof Error ? err.message : err
-          );
-        }
-      }
-
-      // 4. Run pricing engine (incremental after first cycle, realTime for live blend)
-      const pricingResult = await runPricingEngine({
-        incremental: this.cycleCount > 1,
-        realTime: true,
-      });
-      log.info(
-        `Pricing: ${pricingResult.teamPriceRows} team_prices, ${pricingResult.matchProbRows} match_probs`
-      );
-
       this.creditTracker.logStatus();
 
-      // 5. Write credit stats to Supabase for frontend dashboard
+      // 4. Write credit stats to Supabase for frontend dashboard
       await this.writeCreditStats();
 
-      // 6. Oracle V1 cycle — settle finished matches + refresh M1 (feature-flagged)
+      // 5. Oracle V1 cycle — settle finished matches + refresh M1
       if (ORACLE_V1_ENABLED) {
         try {
           await runOracleV1Cycle();

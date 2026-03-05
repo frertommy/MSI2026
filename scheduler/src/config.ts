@@ -104,17 +104,11 @@ export const ORACLE_V1_K = 30;         // Fixed K-factor for B-layer settlement:
 export const ORACLE_V1_BASELINE_ELO = 1500;  // Bootstrap B_value for new teams (league-neutral in v1)
 export const ORACLE_V1_SETTLEMENT_START_DATE = "2025-08-01"; // Only settle matches from current odds-covered season
 
-// Feature flags — default OFF, zero behavior change until explicitly enabled
-export const ORACLE_V1_ENABLED =
-  process.env.ORACLE_V1_ENABLED === "true";           // Master switch: run settlement + M1 cycle
-export const ORACLE_V1_PUBLISH_ENABLED =
-  process.env.ORACLE_V1_PUBLISH_ENABLED === "true";   // Future: gate published_index writes (currently unused)
-export const ORACLE_V1_LIVE_ENABLED =
-  process.env.ORACLE_V1_LIVE_ENABLED === "true";      // Live layer: compute L during matches
-export const ORACLE_V1_FEEDBACK_ENABLED =
-  process.env.ORACLE_V1_FEEDBACK_ENABLED === "true";  // Mark-price feedback: F term from perp market
-export const ORACLE_V1_OFFSEASON_ENABLED =
-  process.env.ORACLE_V1_OFFSEASON_ENABLED === "true"; // Offseason: use outright futures for M when no fixture
+// ─── Oracle V1 feature flags ──────────────────────────────────
+export const ORACLE_V1_ENABLED = true;                 // Oracle V1 always on
+export const ORACLE_V1_LIVE_ENABLED = true;            // Live layer during matches
+export const ORACLE_V1_FEEDBACK_ENABLED = false;       // Stub — no perp mark price yet
+export const ORACLE_V1_OFFSEASON_ENABLED = false;      // Outright sport keys broken (all 404)
 
 // ─── Odds blend constants (Phase 2 — legacy) ────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend
