@@ -109,6 +109,8 @@ export const ORACLE_V1_ENABLED =
   process.env.ORACLE_V1_ENABLED === "true";           // Master switch: run settlement + M1 cycle
 export const ORACLE_V1_PUBLISH_ENABLED =
   process.env.ORACLE_V1_PUBLISH_ENABLED === "true";   // Future: gate published_index writes (currently unused)
+export const ORACLE_V1_LIVE_ENABLED =
+  process.env.ORACLE_V1_LIVE_ENABLED === "true";      // Live layer: compute L during matches
 
 // ─── Odds blend constants (Phase 2 — legacy) ────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend
