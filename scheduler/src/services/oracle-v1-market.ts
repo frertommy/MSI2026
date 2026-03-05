@@ -347,11 +347,12 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   const M1_raw = R_market_fixture - B_value;
 
   // Horizon decay: fixture further away = less confident
+  // kickoffTs already falls back to date + T23:59:59Z when commence_time is NULL
   const HORIZON_DAYS = 21;
   const kickoffMs = new Date(kickoffTs).getTime();
   let c_horizon = 1.0;
 
-  if (isNaN(kickoffMs) || !nextFixture.commence_time) {
+  if (isNaN(kickoffMs)) {
     c_horizon = 0;
   } else {
     const daysToKickoff = Math.max(0, (kickoffMs - Date.now()) / (24 * 3600 * 1000));
