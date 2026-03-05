@@ -122,6 +122,10 @@ function formatDaysUntil(days: number): string {
   return `${days}d`;
 }
 
+function indexToPrice(published_index: number): number {
+  return Math.round(((published_index - 800) / 5) * 100) / 100;
+}
+
 // ─── Mini Sparkline ─────────────────────────────────────────
 
 function Sparkline({ values }: { values: number[] }) {
@@ -498,6 +502,12 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
           {/* Stat row below chart */}
           <div className="mt-3 flex flex-wrap gap-4 text-xs font-mono text-muted border-t border-border pt-3">
             <span>
+              Price{" "}
+              <span className="text-foreground font-bold">
+                ${indexToPrice(Number(selectedState.published_index)).toFixed(2)}
+              </span>
+            </span>
+            <span>
               B{" "}
               <span className="text-foreground">
                 {Number(selectedState.B_value).toFixed(2)}
@@ -576,6 +586,12 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
                 </th>
                 <th
                   className="px-3 py-2 text-right cursor-pointer hover:text-foreground"
+                  onClick={() => handleSort("published_index")}
+                >
+                  $Price{sortArrow("published_index")}
+                </th>
+                <th
+                  className="px-3 py-2 text-right cursor-pointer hover:text-foreground"
                   onClick={() => handleSort("B_value")}
                 >
                   B{sortArrow("B_value")}
@@ -644,6 +660,11 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
                     {/* Index (published_index) — bold */}
                     <td className="px-3 py-2 text-right text-foreground font-bold">
                       {r.published_index.toFixed(2)}
+                    </td>
+
+                    {/* $Price — derived from published_index */}
+                    <td className="px-3 py-2 text-right text-foreground font-bold">
+                      ${indexToPrice(r.published_index).toFixed(2)}
                     </td>
 
                     {/* B */}
