@@ -60,7 +60,7 @@ interface RefreshM1Result {
 const HOME_ADVANTAGE_ELO = 65;
 
 /** Maximum absolute M1 overlay in Elo points — prevents market layer from overwhelming B */
-const MAX_M1_ABS = 75;
+const MAX_M1_ABS = 120;
 
 // ─── Main function ──────────────────────────────────────────
 

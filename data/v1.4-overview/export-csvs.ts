@@ -149,12 +149,12 @@ async function exportPriceHistory(): Promise<number> {
 
   const rows = await fetchPaginated({
     table: "oracle_price_history",
-    select: "team, league, timestamp, b_value, m1_value, published_index, confidence_score, source_fixture_id, publish_reason",
+    select: "team, league, timestamp, b_value, m1_value, l_value, f_value, published_index, confidence_score, source_fixture_id, publish_reason",
     order: { column: "timestamp", ascending: true },
   });
 
   return writeCSV("oracle_price_history.csv",
-    ["team", "league", "timestamp", "b_value", "m1_value", "published_index", "confidence_score", "source_fixture_id", "publish_reason"],
+    ["team", "league", "timestamp", "b_value", "m1_value", "l_value", "f_value", "published_index", "confidence_score", "source_fixture_id", "publish_reason"],
     rows
   );
 }
@@ -164,12 +164,12 @@ async function exportKRSnapshots(): Promise<number> {
 
   const rows = await fetchPaginated({
     table: "oracle_kr_snapshots",
-    select: "fixture_id, bookmaker_count, home_prob, draw_prob, away_prob, home_expected_score, away_expected_score, method, freeze_timestamp",
+    select: "fixture_id, bookmaker_count, home_prob, draw_prob, away_prob, home_expected_score, away_expected_score, method, kr_degraded, freeze_timestamp",
     order: { column: "freeze_timestamp", ascending: true },
   });
 
   return writeCSV("oracle_kr_snapshots.csv",
-    ["fixture_id", "bookmaker_count", "home_prob", "draw_prob", "away_prob", "home_expected_score", "away_expected_score", "method", "freeze_timestamp"],
+    ["fixture_id", "bookmaker_count", "home_prob", "draw_prob", "away_prob", "home_expected_score", "away_expected_score", "method", "kr_degraded", "freeze_timestamp"],
     rows
   );
 }
