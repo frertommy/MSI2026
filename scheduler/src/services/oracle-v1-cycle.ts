@@ -27,7 +27,8 @@ import { settleFixture } from "./oracle-v1-settlement.js";
 import { refreshM1 } from "./oracle-v1-market.js";
 import { computeLiveLayer } from "./oracle-v1-live.js";
 import { computeFeedback } from "./oracle-v1-feedback.js";
-import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED, ORACLE_V1_FEEDBACK_ENABLED } from "../config.js";
+import { computeRFutures } from "./oracle-v1-futures.js";
+import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED, ORACLE_V1_FEEDBACK_ENABLED, ORACLE_V1_OFFSEASON_ENABLED } from "../config.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -289,18 +290,54 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     if (missingTeams.length > 0) {
       const now = new Date().toISOString();
       const season = deriveSeason(new Date().toISOString().slice(0, 10));
-      const bootstrapRows = missingTeams.map(t => ({
-        team_id: t.team,
-        season,
-        b_value: ORACLE_V1_BASELINE_ELO,
-        m1_value: 0,
-        published_index: ORACLE_V1_BASELINE_ELO,
-        confidence_score: 0,
-        next_fixture_id: null,
-        last_kr_fixture_id: null,
-        last_market_refresh_ts: null,
-        updated_at: now,
-      }));
+
+      // Build bootstrap rows — use R_futures for initial B when available
+      const bootstrapRows: {
+        team_id: string;
+        season: string;
+        b_value: number;
+        m1_value: number;
+        published_index: number;
+        confidence_score: number;
+        next_fixture_id: null;
+        last_kr_fixture_id: null;
+        last_market_refresh_ts: null;
+        updated_at: string;
+      }[] = [];
+
+      for (const t of missingTeams) {
+        let initialB = ORACLE_V1_BASELINE_ELO;
+
+        if (ORACLE_V1_OFFSEASON_ENABLED) {
+          try {
+            const futures = await computeRFutures(t.team, t.league);
+            if (futures && !futures.stale && futures.confidence > 0.3) {
+              initialB = futures.R_futures;
+              log.info(
+                `Bootstrap: ${t.team} initialized at B=${initialB.toFixed(1)} from outright odds ` +
+                `(P_title=${futures.P_title.toFixed(4)})`
+              );
+            }
+          } catch (err) {
+            log.warn(
+              `Bootstrap: futures lookup failed for ${t.team}, using default B=${ORACLE_V1_BASELINE_ELO}`
+            );
+          }
+        }
+
+        bootstrapRows.push({
+          team_id: t.team,
+          season,
+          b_value: Number(initialB.toFixed(4)),
+          m1_value: 0,
+          published_index: Number(initialB.toFixed(4)),
+          confidence_score: 0,
+          next_fixture_id: null,
+          last_kr_fixture_id: null,
+          last_market_refresh_ts: null,
+          updated_at: now,
+        });
+      }
 
       const { error: bsErr } = await sb
         .from("team_oracle_state")
@@ -311,13 +348,13 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       } else {
         bootstrapCount = missingTeams.length;
         // Also write price history for bootstrapped teams
-        const phRows = missingTeams.map(t => ({
-          team: t.team,
-          league: t.league,
+        const phRows = bootstrapRows.map(br => ({
+          team: br.team_id,
+          league: missingTeams.find(t => t.team === br.team_id)?.league ?? "Unknown",
           timestamp: now,
-          b_value: ORACLE_V1_BASELINE_ELO,
+          b_value: br.b_value,
           m1_value: 0,
-          published_index: ORACLE_V1_BASELINE_ELO,
+          published_index: br.b_value,
           confidence_score: 0,
           source_fixture_id: null,
           publish_reason: "bootstrap",
@@ -331,7 +368,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
           log.warn(`Oracle V1 cycle: bootstrap price history insert failed: ${phErr.message}`);
         }
 
-        log.info(`Oracle V1 cycle: bootstrapped ${bootstrapCount} new teams at B=${ORACLE_V1_BASELINE_ELO}`);
+        log.info(`Oracle V1 cycle: bootstrapped ${bootstrapCount} new teams`);
 
         // Add to existing set so they get M1 refreshed this cycle
         for (const t of missingTeams) {

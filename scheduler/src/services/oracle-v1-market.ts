@@ -12,13 +12,16 @@
  *
  * Constraints:
  *   - No imports from pricing-engine.ts or oracle-v1-settlement.ts
- *   - No carry decay, no xG, no futures/outright odds
+ *   - No carry decay, no xG
+ *   - If ORACLE_V1_OFFSEASON_ENABLED and no fixture: uses outright futures for M
  *   - If team is mid-match, skip entirely — no writes
  *   - published_index is always B_value + M1_value
  */
 
 import { getSupabase } from "../api/supabase-client.js";
 import { powerDevigOdds, median, oddsImpliedStrength } from "./odds-blend.js";
+import { computeRFutures } from "./oracle-v1-futures.js";
+import { ORACLE_V1_OFFSEASON_ENABLED } from "../config.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -115,8 +118,42 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   const B_value = teamState ? Number(teamState.b_value) : 0;
 
-  // No upcoming fixture → M1 = 0, published_index = B_value
+  // No upcoming fixture → try futures-based offseason regime, else M1 = 0
   if (!nextFixtures || nextFixtures.length === 0) {
+    if (ORACLE_V1_OFFSEASON_ENABLED) {
+      const teamLeague = await getTeamLeague(sb, team);
+      const futures = await computeRFutures(team, teamLeague);
+
+      if (futures && !futures.stale && futures.confidence > 0) {
+        const M_raw = futures.R_futures - B_value;
+        const M_unclamped = futures.confidence * M_raw;
+        const M = Math.max(-MAX_M1_ABS, Math.min(MAX_M1_ABS, M_unclamped));
+        const published_index = B_value + M;
+
+        await writeM1State(sb, team, {
+          m1_value: M,
+          published_index,
+          confidence_score: futures.confidence,
+          next_fixture_id: null,
+        });
+
+        log.debug(
+          `M1 refresh (offseason): ${team} — R_futures=${futures.R_futures.toFixed(1)} ` +
+          `P_title=${futures.P_title.toFixed(4)} B=${B_value.toFixed(1)} ` +
+          `M=${M.toFixed(2)} c=${futures.confidence.toFixed(3)} [${futures.bookmaker_count} books]`
+        );
+
+        return {
+          updated: true,
+          M1_value: M,
+          confidence: futures.confidence,
+          published_index,
+          next_fixture_id: null,
+        };
+      }
+    }
+
+    // Fallback: no fixtures AND no futures (or offseason disabled) → M = 0
     await writeM1State(sb, team, {
       m1_value: 0,
       published_index: B_value,
@@ -124,7 +161,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
       next_fixture_id: null,
     });
 
-    log.debug(`M1 refresh: ${team} — no upcoming fixture, M1=0`);
+    log.debug(`M1 refresh: ${team} — no upcoming fixture, no futures, M1=0`);
     return {
       updated: true,
       M1_value: 0,

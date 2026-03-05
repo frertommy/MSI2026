@@ -113,6 +113,8 @@ export const ORACLE_V1_LIVE_ENABLED =
   process.env.ORACLE_V1_LIVE_ENABLED === "true";      // Live layer: compute L during matches
 export const ORACLE_V1_FEEDBACK_ENABLED =
   process.env.ORACLE_V1_FEEDBACK_ENABLED === "true";  // Mark-price feedback: F term from perp market
+export const ORACLE_V1_OFFSEASON_ENABLED =
+  process.env.ORACLE_V1_OFFSEASON_ENABLED === "true"; // Offseason: use outright futures for M when no fixture
 
 // ─── Odds blend constants (Phase 2 — legacy) ────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend
