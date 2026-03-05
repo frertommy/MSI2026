@@ -141,6 +141,16 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
           next_fixture_id: null,
         });
 
+        // Record price history for offseason futures path
+        await writePriceHistory(sb, team, {
+          b_value: B_value,
+          m1_value: M,
+          published_index,
+          confidence_score: futures.confidence,
+          source_fixture_id: null,
+          publish_reason: "market_refresh",
+        });
+
         log.debug(
           `M1 refresh (offseason): ${team} — R_futures=${futures.R_futures.toFixed(1)} ` +
           `P_title=${futures.P_title.toFixed(4)} B=${B_value.toFixed(1)} ` +
@@ -163,6 +173,16 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
       published_index: B_value,
       confidence_score: 0,
       next_fixture_id: null,
+    });
+
+    // Record price history for no-fixture path
+    await writePriceHistory(sb, team, {
+      b_value: B_value,
+      m1_value: 0,
+      published_index: B_value,
+      confidence_score: 0,
+      source_fixture_id: null,
+      publish_reason: "market_refresh",
     });
 
     log.debug(`M1 refresh: ${team} — no upcoming fixture, no futures, M1=0`);
@@ -341,6 +361,16 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
       next_fixture_id: nextFixture.fixture_id,
     });
 
+    // Record price history for insufficient-bookmakers path
+    await writePriceHistory(sb, team, {
+      b_value: B_value,
+      m1_value: 0,
+      published_index: B_value,
+      confidence_score: 0,
+      source_fixture_id: nextFixture.fixture_id,
+      publish_reason: "market_refresh",
+    });
+
     log.debug(`M1 refresh: ${team} — only ${bookmakerCount} bookmaker(s), M1=0`);
     return {
       updated: true,
@@ -439,26 +469,14 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   });
 
   // ── Step 8: Append price history ──────────────────────────
-  {
-    const { error: phErr } = await sb
-      .from("oracle_price_history")
-      .insert([{
-        team,
-        league: await getTeamLeague(sb, team),
-        timestamp: new Date().toISOString(),
-        b_value: Number(B_value.toFixed(4)),
-        m1_value: Number(M1.toFixed(4)),
-        published_index: Number(published_index.toFixed(4)),
-        confidence_score: Number(eff_conf.toFixed(4)),
-        source_fixture_id: nextFixture.fixture_id,
-        publish_reason: "market_refresh",
-      }]);
-
-    if (phErr) {
-      log.warn(`M1 price history insert failed for ${team}: ${phErr.message}`);
-      // Non-fatal — M1 write already succeeded
-    }
-  }
+  await writePriceHistory(sb, team, {
+    b_value: B_value,
+    m1_value: M1,
+    published_index,
+    confidence_score: eff_conf,
+    source_fixture_id: nextFixture.fixture_id,
+    publish_reason: "market_refresh",
+  });
 
   log.debug(
     `M1 refresh: ${team} — ` +
@@ -518,6 +536,43 @@ function fuzzyNorm(name: string): string {
     .replace(/[''`.-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// ─── Price history writer ────────────────────────────────────
+
+/**
+ * Append one row to oracle_price_history.
+ * Non-fatal: logs a warning if the insert fails but doesn't throw.
+ */
+async function writePriceHistory(
+  sb: ReturnType<typeof getSupabase>,
+  team: string,
+  data: {
+    b_value: number;
+    m1_value: number;
+    published_index: number;
+    confidence_score: number;
+    source_fixture_id: number | null;
+    publish_reason: string;
+  }
+): Promise<void> {
+  const { error } = await sb
+    .from("oracle_price_history")
+    .insert([{
+      team,
+      league: await getTeamLeague(sb, team),
+      timestamp: new Date().toISOString(),
+      b_value: Number(data.b_value.toFixed(4)),
+      m1_value: Number(data.m1_value.toFixed(4)),
+      published_index: Number(data.published_index.toFixed(4)),
+      confidence_score: Number(data.confidence_score.toFixed(4)),
+      source_fixture_id: data.source_fixture_id,
+      publish_reason: data.publish_reason,
+    }]);
+
+  if (error) {
+    log.warn(`M1 price history insert failed for ${team}: ${error.message}`);
+  }
 }
 
 // ─── State writer ───────────────────────────────────────────
