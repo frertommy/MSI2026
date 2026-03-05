@@ -414,21 +414,26 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
   const delta_B_home = ORACLE_V1_K * (S_home - E_KR_home);
   const delta_B_away = ORACLE_V1_K * (S_away - E_KR_away);
 
-  // ── Step 5: Load current B values ────────────────────────
+  // ── Step 5: Load current B + M1 values ──────────────────
   const { data: homeState } = await sb
     .from("team_oracle_state")
-    .select("b_value")
+    .select("b_value, m1_value")
     .eq("team_id", match.home_team)
     .single();
 
   const { data: awayState } = await sb
     .from("team_oracle_state")
-    .select("b_value")
+    .select("b_value, m1_value")
     .eq("team_id", match.away_team)
     .single();
 
   const B_before_home = homeState ? Number(homeState.b_value) : 0;
   const B_before_away = awayState ? Number(awayState.b_value) : 0;
+
+  // Carry existing M1 through settlement so published_index never "drops to B"
+  // for a moment. The next M1 refresh (seconds later) will recompute against the new B.
+  const M1_carry_home = homeState ? Number(homeState.m1_value) : 0;
+  const M1_carry_away = awayState ? Number(awayState.m1_value) : 0;
 
   const B_after_home = B_before_home + delta_B_home;
   const B_after_away = B_before_away + delta_B_away;
@@ -482,10 +487,10 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.home_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_home.toFixed(4)),
-      m1_value: 0,
+      m1_value: Number(M1_carry_home.toFixed(4)),
       l_value: 0,
       m1_locked: null,
-      published_index: Number(B_after_home.toFixed(4)),
+      published_index: Number((B_after_home + M1_carry_home).toFixed(4)),
       confidence_score: 0,
       last_kr_fixture_id: fixtureId,
       updated_at: now,
@@ -495,8 +500,8 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       league: match.league,
       timestamp: now,
       b_value: Number(B_after_home.toFixed(4)),
-      m1_value: 0,
-      published_index: Number(B_after_home.toFixed(4)),
+      m1_value: Number(M1_carry_home.toFixed(4)),
+      published_index: Number((B_after_home + M1_carry_home).toFixed(4)),
       confidence_score: null,
       source_fixture_id: fixtureId,
       publish_reason: "settlement",
@@ -518,10 +523,10 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       team_id: match.away_team,
       season: deriveSeason(match.date),
       b_value: Number(B_after_away.toFixed(4)),
-      m1_value: 0,
+      m1_value: Number(M1_carry_away.toFixed(4)),
       l_value: 0,
       m1_locked: null,
-      published_index: Number(B_after_away.toFixed(4)),
+      published_index: Number((B_after_away + M1_carry_away).toFixed(4)),
       confidence_score: 0,
       last_kr_fixture_id: fixtureId,
       updated_at: now,
@@ -531,8 +536,8 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       league: match.league,
       timestamp: now,
       b_value: Number(B_after_away.toFixed(4)),
-      m1_value: 0,
-      published_index: Number(B_after_away.toFixed(4)),
+      m1_value: Number(M1_carry_away.toFixed(4)),
+      published_index: Number((B_after_away + M1_carry_away).toFixed(4)),
       confidence_score: null,
       source_fixture_id: fixtureId,
       publish_reason: "settlement",
@@ -581,7 +586,7 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
     `Settlement: ${match.home_team} (ΔB=${delta_B_home > 0 ? "+" : ""}${delta_B_home.toFixed(2)}) ` +
     `vs ${match.away_team} (ΔB=${delta_B_away > 0 ? "+" : ""}${delta_B_away.toFixed(2)}) ` +
     `[${match.score}, ${frozenKR.bookmaker_count} books, E_KR=${E_KR_home.toFixed(3)}/${E_KR_away.toFixed(3)}] ` +
-    `— M1/conf reset to 0 for both teams`
+    `— M1 carried (home=${M1_carry_home.toFixed(2)}, away=${M1_carry_away.toFixed(2)})`
   );
 
   return {
