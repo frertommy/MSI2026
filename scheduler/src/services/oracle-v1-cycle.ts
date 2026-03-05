@@ -22,6 +22,9 @@
  *   - Feature-flagged: does nothing if ORACLE_V1_ENABLED is false
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getSupabase } from "../api/supabase-client.js";
 import { settleFixture } from "./oracle-v1-settlement.js";
 import { refreshM1 } from "./oracle-v1-market.js";
@@ -30,6 +33,22 @@ import { computeFeedback } from "./oracle-v1-feedback.js";
 import { computeRFutures } from "./oracle-v1-futures.js";
 import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED, ORACLE_V1_FEEDBACK_ENABLED, ORACLE_V1_OFFSEASON_ENABLED } from "../config.js";
 import { log } from "../logger.js";
+
+// ─── Alias map: skip bootstrap for alias-source names ───────
+// If "Bayern Munich" → "Bayern München", then "Bayern Munich" is redundant.
+const __dirname_cycle = path.dirname(fileURLToPath(import.meta.url));
+const aliasSourceNames = new Set<string>();
+try {
+  const raw = fs.readFileSync(path.resolve(__dirname_cycle, "../data/team-aliases.json"), "utf-8");
+  const aliases: Record<string, string> = JSON.parse(raw);
+  for (const [source, canonical] of Object.entries(aliases)) {
+    if (source !== canonical) {
+      aliasSourceNames.add(source);
+    }
+  }
+} catch {
+  // Non-fatal — alias map may not exist
+}
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -114,6 +133,11 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
   const sb = getSupabase();
 
   log.info("Oracle V1 cycle starting...");
+
+  // ── Step 0: Clean up stale fixtures ─────────────────────────
+  // Flip fixtures with status=upcoming and date > 2 days ago to "cancelled".
+  // Prevents data dirt from accumulating when API-Football misses status updates.
+  await cleanupStaleFixtures(sb);
 
   // ── Step 1: Settle newly-finished matches ──────────────────
   // Query all finished matches, then left-join settlement_log to find
@@ -285,7 +309,9 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
   let bootstrapCount = 0;
 
   if (allMatchTeams) {
-    const missingTeams = allMatchTeams.filter(t => !existingTeams.has(t.team) && !frozenTeams.has(t.team));
+    const missingTeams = allMatchTeams.filter(
+      t => !existingTeams.has(t.team) && !frozenTeams.has(t.team) && !aliasSourceNames.has(t.team)
+    );
 
     if (missingTeams.length > 0) {
       const now = new Date().toISOString();
@@ -718,6 +744,35 @@ async function getTeamLeagueCached(
   const league = data?.league ?? null;
   teamLeagueCache.set(teamId, league);
   return league;
+}
+
+/**
+ * Clean up stale fixtures: flip status=upcoming fixtures with date > 2 days ago
+ * to "cancelled". This prevents data dirt from accumulating when API-Football
+ * misses match status transitions.
+ *
+ * Only touches fixtures ≥ 2 days old to avoid race conditions with
+ * matches that just finished but haven't been updated yet.
+ */
+async function cleanupStaleFixtures(
+  sb: ReturnType<typeof getSupabase>
+): Promise<void> {
+  const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+
+  const { data: stale, error, count } = await sb
+    .from("matches")
+    .update({ status: "cancelled" }, { count: "exact" })
+    .eq("status", "upcoming")
+    .lt("date", twoDaysAgo);
+
+  if (error) {
+    log.warn(`Stale fixture cleanup failed: ${error.message}`);
+    return;
+  }
+
+  if (count && count > 0) {
+    log.info(`Stale fixture cleanup: flipped ${count} stale upcoming fixtures to cancelled`);
+  }
 }
 
 /** Fetch all distinct teams from matches table with their league. */

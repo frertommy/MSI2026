@@ -100,7 +100,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   const { data: nextFixtures, error: nextErr } = await sb
     .from("matches")
-    .select("fixture_id, date, home_team, away_team, commence_time")
+    .select("fixture_id, date, home_team, away_team, commence_time, league")
     .or(`home_team.eq.${team},away_team.eq.${team}`)
     .eq("status", "upcoming")
     .gte("date", today)
@@ -181,6 +181,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     home_team: string;
     away_team: string;
     commence_time: string | null;
+    league: string;
   };
 
   const isHome = nextFixture.home_team === team;
@@ -204,37 +205,94 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   // ── Fallback: fixture ID mismatch between API-Football and Odds API ──
   // API-Football and The Odds API assign different fixture IDs for the same match
-  // (especially non-EPL leagues). If no odds under the primary ID, search by team+date.
+  // (especially non-EPL leagues). If no odds under the primary ID, search broadly:
+  //   1. Exact team name match (different fixture ID, same match)
+  //   2. League + date range fuzzy match (catches cross-API naming differences like
+  //      "SSC Napoli" vs "Napoli", "Athletic Bilbao" vs "Athletic Club")
   if (allSnapshots.length === 0) {
     const matchDate = nextFixture.date; // YYYY-MM-DD
-    const dayBefore = new Date(new Date(matchDate).getTime() - 86400000).toISOString().slice(0, 10);
-    const dayAfter = new Date(new Date(matchDate).getTime() + 86400000).toISOString().slice(0, 10);
+    // ±3 days because API-Football and Odds API sometimes disagree on match dates
+    // (e.g. Napoli vs Torino: API-Football says Mar 6, Odds API says Mar 8)
+    const dayBefore = new Date(new Date(matchDate).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+    const dayAfter = new Date(new Date(matchDate).getTime() + 3 * 86400000).toISOString().slice(0, 10);
 
+    // Strategy A: Exact team names, different fixture ID
     const { data: altFixtures } = await sb
       .from("matches")
-      .select("fixture_id")
+      .select("fixture_id, home_team, away_team")
       .eq("home_team", nextFixture.home_team)
       .eq("away_team", nextFixture.away_team)
       .gte("date", dayBefore)
       .lte("date", dayAfter)
       .neq("fixture_id", nextFixture.fixture_id);
 
+    let foundAlt = false;
+
     if (altFixtures && altFixtures.length > 0) {
-      const altId = altFixtures[0].fixture_id as number;
+      for (const alt of altFixtures) {
+        const altId = alt.fixture_id as number;
+        const { data: altOdds } = await sb
+          .from("odds_snapshots")
+          .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+          .eq("fixture_id", altId)
+          .lt("snapshot_time", kickoffTs)
+          .order("snapshot_time", { ascending: false });
 
-      const { data: altOdds } = await sb
-        .from("odds_snapshots")
-        .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
-        .eq("fixture_id", altId)
-        .lt("snapshot_time", kickoffTs)
-        .order("snapshot_time", { ascending: false });
+        if (altOdds && altOdds.length > 0) {
+          allSnapshots = altOdds as OddsSnapshotRow[];
+          log.info(
+            `M1 fixture fallback (exact): ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
+            `using alt ${altId} (${allSnapshots.length} snapshots)`
+          );
+          foundAlt = true;
+          break;
+        }
+      }
+    }
 
-      if (altOdds && altOdds.length > 0) {
-        allSnapshots = altOdds as OddsSnapshotRow[];
-        log.info(
-          `M1 fixture fallback: ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
-          `using alt ${altId} (${allSnapshots.length} snapshots)`
-        );
+    // Strategy B: League + date range, fuzzy team name match
+    // Catches cross-API naming differences (e.g. "Napoli" vs "SSC Napoli")
+    if (!foundAlt && nextFixture.league) {
+      const { data: leagueFixtures } = await sb
+        .from("matches")
+        .select("fixture_id, home_team, away_team")
+        .eq("league", nextFixture.league)
+        .gte("date", dayBefore)
+        .lte("date", dayAfter)
+        .neq("fixture_id", nextFixture.fixture_id);
+
+      if (leagueFixtures && leagueFixtures.length > 0) {
+        const homeNorm = fuzzyNorm(nextFixture.home_team);
+        const awayNorm = fuzzyNorm(nextFixture.away_team);
+
+        for (const lf of leagueFixtures) {
+          const lfHomeNorm = fuzzyNorm(lf.home_team as string);
+          const lfAwayNorm = fuzzyNorm(lf.away_team as string);
+
+          // Check if both teams fuzzy-match (home↔home, away↔away)
+          const homeMatch = lfHomeNorm.includes(homeNorm) || homeNorm.includes(lfHomeNorm);
+          const awayMatch = lfAwayNorm.includes(awayNorm) || awayNorm.includes(lfAwayNorm);
+
+          if (homeMatch && awayMatch) {
+            const altId = lf.fixture_id as number;
+            const { data: altOdds } = await sb
+              .from("odds_snapshots")
+              .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+              .eq("fixture_id", altId)
+              .lt("snapshot_time", kickoffTs)
+              .order("snapshot_time", { ascending: false });
+
+            if (altOdds && altOdds.length > 0) {
+              allSnapshots = altOdds as OddsSnapshotRow[];
+              log.info(
+                `M1 fixture fallback (fuzzy): ${team} — primary ${nextFixture.fixture_id} ` +
+                `(${nextFixture.home_team} vs ${nextFixture.away_team}) had 0 odds, ` +
+                `using alt ${altId} (${lf.home_team} vs ${lf.away_team}, ${allSnapshots.length} snapshots)`
+              );
+              break;
+            }
+          }
+        }
       }
     }
   }
@@ -443,6 +501,23 @@ async function getTeamLeague(
   const league = data?.league ?? "Unknown";
   leagueCache.set(team, league);
   return league;
+}
+
+// ─── Fuzzy name normalization for cross-API matching ─────────
+
+/**
+ * Strip accents and common prefixes/suffixes for fuzzy team name matching.
+ * "SSC Napoli" → "napoli", "Athletic Bilbao" → "athletic bilbao"
+ */
+function fuzzyNorm(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")  // strip accents
+    .toLowerCase()
+    .replace(/\b(fc|cf|afc|sc|ssc|ac|as|us|rc|rcd|ca|sv|vfb|tsg|bsc|ud|cd)\b/g, "")
+    .replace(/[''`.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // ─── State writer ───────────────────────────────────────────
