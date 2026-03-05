@@ -142,6 +142,9 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
 
       // Unsettled = < 2 entries (need both home + away)
       unsettledFixtures = finishedIds.filter(fid => (countByFixture.get(fid) ?? 0) < 2);
+
+      // Deterministic ordering: settle by fixture_id ascending so results are reproducible
+      unsettledFixtures.sort((a, b) => a - b);
     }
   }
 

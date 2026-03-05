@@ -160,9 +160,32 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     latestByBook.set(snap.bookmaker, snap);
   }
 
+  // Prefer snapshots within 6h of kickoff for better KR quality
+  const SIX_HOURS_MS = 6 * 3600 * 1000;
+  const kickoffMs = new Date(kickoffTs).getTime();
+
+  const recentByBook = new Map<string, OddsSnapshotRow>();
+  for (const [book, snap] of latestByBook) {
+    const snapMs = new Date(snap.snapshot_time).getTime();
+    if (kickoffMs - snapMs <= SIX_HOURS_MS) {
+      recentByBook.set(book, snap);
+    }
+  }
+
+  // Use 6h window if ≥2 books available; otherwise fall back to all pre-kickoff
+  const selectedBooks = recentByBook.size >= 2 ? recentByBook : latestByBook;
+  const krDegraded = recentByBook.size < 2;
+
+  if (krDegraded) {
+    log.warn(
+      `freezeKR: fixture ${fixtureId} — only ${recentByBook.size} book(s) in 6h window, ` +
+      `falling back to all ${latestByBook.size} pre-kickoff snapshots`
+    );
+  }
+
   // De-vig each bookmaker (power de-vig)
   const bookmakerKRs: BookmakerKR[] = [];
-  for (const [bookmaker, snap] of latestByBook) {
+  for (const [bookmaker, snap] of selectedBooks) {
     const probs = powerDevigOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
     if (probs.homeProb <= 0 || probs.drawProb <= 0 || probs.awayProb <= 0) continue;
     if (probs.homeProb >= 1 || probs.drawProb >= 1 || probs.awayProb >= 1) continue;
@@ -217,6 +240,7 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
       snapshot_time: b.snapshot_time,
     })),
     method: "power_devig_median_v1.4",
+    kr_degraded: krDegraded,
   };
 
   const { error: insertErr } = await sb
@@ -233,7 +257,10 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     return null;
   }
 
-  log.debug(`freezeKR: fixture ${fixtureId} frozen with ${n} bookmakers`);
+  log.debug(
+    `freezeKR: fixture ${fixtureId} frozen with ${n} bookmakers` +
+    `${krDegraded ? ' (DEGRADED — no 6h window)' : ''}`
+  );
 
   return {
     fixture_id: fixtureId,
