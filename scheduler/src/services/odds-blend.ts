@@ -32,6 +32,76 @@ export function normalizeOdds(
   };
 }
 
+// ─── Power de-vig ───────────────────────────────────────────
+/**
+ * Power de-vig: find exponent k such that (1/H)^k + (1/D)^k + (1/A)^k = 1.
+ * Corrects favorite-longshot bias that basic proportional normalization misses.
+ * Falls back to normalizeOdds() if any odds < 1.01 or solver fails.
+ */
+export function powerDevigOdds(
+  homeOdds: number,
+  drawOdds: number,
+  awayOdds: number
+): { homeProb: number; drawProb: number; awayProb: number; k: number | null } {
+  const rH = 1 / homeOdds;
+  const rD = 1 / drawOdds;
+  const rA = 1 / awayOdds;
+
+  // Guard: degenerate odds → fall back
+  if (homeOdds < 1.01 || drawOdds < 1.01 || awayOdds < 1.01) {
+    const fallback = normalizeOdds(homeOdds, drawOdds, awayOdds);
+    return { ...fallback, k: null };
+  }
+
+  // Bisection: find k where f(k) = rH^k + rD^k + rA^k - 1 = 0
+  // f(k) is monotonically decreasing (all r_i < 1, so higher k → smaller r_i^k)
+  let lo = 0.01;
+  let hi = 10.0;
+  let mid = 1.0;
+  const TOL = 1e-10;
+  const MAX_ITER = 100;
+
+  const f = (k: number) => rH ** k + rD ** k + rA ** k - 1;
+
+  // Verify bracket: f(lo) should be > 0, f(hi) should be < 0
+  if (f(lo) < 0 || f(hi) > 0) {
+    const fallback = normalizeOdds(homeOdds, drawOdds, awayOdds);
+    return { ...fallback, k: null };
+  }
+
+  for (let i = 0; i < MAX_ITER; i++) {
+    mid = (lo + hi) / 2;
+    const fMid = f(mid);
+    if (Math.abs(fMid) < TOL) break;
+    if (fMid > 0) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const homeProb = rH ** mid;
+  const drawProb = rD ** mid;
+  const awayProb = rA ** mid;
+
+  return { homeProb, drawProb, awayProb, k: mid };
+}
+
+// ─── Median helper ──────────────────────────────────────────
+/**
+ * Standard median: sort ascending, return middle element
+ * (or average of two middle elements for even length).
+ */
+export function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
 // ─── Odds-implied Elo strength ───────────────────────────────
 /**
  * Given a team's expected score (from odds) and their opponent's Elo,

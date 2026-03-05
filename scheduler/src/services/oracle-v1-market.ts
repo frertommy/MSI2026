@@ -8,7 +8,7 @@
  * Where:
  *   R_market_fixture = Elo-implied strength from next-fixture prematch odds
  *   B_value          = team's permanent earned base (from settlement engine)
- *   c(t)             = confidence scalar ∈ [0, 1] from book count, dispersion, recency
+ *   c(t)             = confidence scalar ∈ [0, 1] = c_books × c_dispersion × c_recency × c_horizon
  *
  * Constraints:
  *   - No imports from pricing-engine.ts or oracle-v1-settlement.ts
@@ -18,7 +18,7 @@
  */
 
 import { getSupabase } from "../api/supabase-client.js";
-import { normalizeOdds, oddsImpliedStrength } from "./odds-blend.js";
+import { powerDevigOdds, median, oddsImpliedStrength } from "./odds-blend.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -170,7 +170,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     latestByBook.set(snap.bookmaker, snap);
   }
 
-  // De-vig each bookmaker
+  // De-vig each bookmaker (power de-vig)
   const bookmakerProbs: {
     bookmaker: string;
     homeProb: number;
@@ -180,7 +180,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   }[] = [];
 
   for (const [bookmaker, snap] of latestByBook) {
-    const probs = normalizeOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
+    const probs = powerDevigOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
     if (probs.homeProb <= 0 || probs.drawProb <= 0 || probs.awayProb <= 0) continue;
     if (probs.homeProb >= 1 || probs.drawProb >= 1 || probs.awayProb >= 1) continue;
 
@@ -231,14 +231,17 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   const hoursSinceLatest = (Date.now() - latestSnapshotTime) / (1000 * 3600);
   const c_recency = 1 - Math.min(hoursSinceLatest / 48, 1);
 
-  const confidence = (c_books + c_dispersion + c_recency) / 3;
+  const confidence = c_books * c_dispersion * c_recency;
 
   // ── Step 5: Compute R_market_fixture ─────────────────────
-  // Average de-vigged probabilities across bookmakers
-  const n = bookmakerProbs.length;
-  const consensusHomeProb = bookmakerProbs.reduce((s, b) => s + b.homeProb, 0) / n;
-  const consensusDrawProb = bookmakerProbs.reduce((s, b) => s + b.drawProb, 0) / n;
-  const consensusAwayProb = bookmakerProbs.reduce((s, b) => s + b.awayProb, 0) / n;
+  // Median de-vigged probabilities across bookmakers (robust to outliers) + renormalize
+  const rawHome = median(bookmakerProbs.map(b => b.homeProb));
+  const rawDraw = median(bookmakerProbs.map(b => b.drawProb));
+  const rawAway = median(bookmakerProbs.map(b => b.awayProb));
+  const probTotal = rawHome + rawDraw + rawAway;
+  const consensusHomeProb = rawHome / probTotal;
+  const consensusDrawProb = rawDraw / probTotal;
+  const consensusAwayProb = rawAway / probTotal;
 
   // Team's expected score from consensus
   const teamExpectedScore = isHome
@@ -264,15 +267,37 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
 
   // ── Step 6: Compute M1 ──────────────────────────────────
   const M1_raw = R_market_fixture - B_value;
-  const M1_unclamped = confidence * M1_raw;
+
+  // Horizon decay: fixture further away = less confident
+  const HORIZON_DAYS = 10;
+  const kickoffMs = new Date(kickoffTs).getTime();
+  let c_horizon = 1.0;
+
+  if (isNaN(kickoffMs) || !nextFixture.commence_time) {
+    c_horizon = 0;
+  } else {
+    const daysToKickoff = Math.max(0, (kickoffMs - Date.now()) / (24 * 3600 * 1000));
+    c_horizon = Math.max(0, Math.min(1, 1 - daysToKickoff / HORIZON_DAYS));
+  }
+
+  const eff_conf = confidence * c_horizon;
+
+  const M1_unclamped = eff_conf * M1_raw;
   const M1 = Math.max(-MAX_M1_ABS, Math.min(MAX_M1_ABS, M1_unclamped));
   const published_index = B_value + M1;
+
+  if (Math.abs(M1 - M1_unclamped) > 0.01) {
+    log.warn(
+      `M1 CLAMPED: ${team} raw=${M1_unclamped.toFixed(2)} clamped=${M1.toFixed(2)} ` +
+      `days_to_ko=${c_horizon < 1 ? ((1 - c_horizon) * HORIZON_DAYS).toFixed(1) : '0'}`
+    );
+  }
 
   // ── Step 7: Write outputs ────────────────────────────────
   await writeM1State(sb, team, {
     m1_value: M1,
     published_index,
-    confidence_score: confidence,
+    confidence_score: eff_conf,
     next_fixture_id: nextFixture.fixture_id,
   });
 
@@ -287,7 +312,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
         b_value: Number(B_value.toFixed(4)),
         m1_value: Number(M1.toFixed(4)),
         published_index: Number(published_index.toFixed(4)),
-        confidence_score: Number(confidence.toFixed(4)),
+        confidence_score: Number(eff_conf.toFixed(4)),
         source_fixture_id: nextFixture.fixture_id,
         publish_reason: "market_refresh",
       }]);
@@ -302,6 +327,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     `M1 refresh: ${team} — ` +
     `R_mkt=${R_market_fixture.toFixed(1)} B=${B_value.toFixed(1)} ` +
     `M1_raw=${M1_raw.toFixed(2)} c=${confidence.toFixed(3)} ` +
+    `c_hor=${c_horizon.toFixed(3)} eff=${eff_conf.toFixed(3)} ` +
     `M1=${M1.toFixed(2)} idx=${published_index.toFixed(2)} ` +
     `[${bookmakerCount} books, vs ${opponent} (${isHome ? "H" : "A"})]`
   );
@@ -309,7 +335,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   return {
     updated: true,
     M1_value: M1,
-    confidence,
+    confidence: eff_conf,
     published_index,
     next_fixture_id: nextFixture.fixture_id,
   };

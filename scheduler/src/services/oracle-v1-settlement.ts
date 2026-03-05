@@ -12,7 +12,8 @@
  *
  * Constraints:
  *   - E_KR is read exclusively from oracle_kr_snapshots — never recomputed from raw odds
- *   - normalizeOdds() from odds-blend.ts is the only legacy utility used
+ *   - powerDevigOdds() from odds-blend.ts for favorite-longshot bias correction
+ *   - median() consensus across bookmakers (robust to outlier books)
  *   - Atomic: all writes per fixture go in one batch; unique constraint catches duplicates
  *   - Idempotent: checks settlement_log before writing; second call is a no-op
  *   - Fully reproducible: trace_payload captures every input for audit replay
@@ -21,7 +22,7 @@
  */
 
 import { getSupabase } from "../api/supabase-client.js";
-import { normalizeOdds } from "./odds-blend.js";
+import { powerDevigOdds, median } from "./odds-blend.js";
 import { ORACLE_V1_K } from "../config.js";
 import { log } from "../logger.js";
 
@@ -52,6 +53,7 @@ interface BookmakerKR {
   homeProb: number;
   drawProb: number;
   awayProb: number;
+  k: number | null;
   snapshot_time: string;
 }
 
@@ -158,10 +160,10 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     latestByBook.set(snap.bookmaker, snap);
   }
 
-  // De-vig each bookmaker
+  // De-vig each bookmaker (power de-vig)
   const bookmakerKRs: BookmakerKR[] = [];
   for (const [bookmaker, snap] of latestByBook) {
-    const probs = normalizeOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
+    const probs = powerDevigOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
     if (probs.homeProb <= 0 || probs.drawProb <= 0 || probs.awayProb <= 0) continue;
     if (probs.homeProb >= 1 || probs.drawProb >= 1 || probs.awayProb >= 1) continue;
 
@@ -170,6 +172,7 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
       homeProb: probs.homeProb,
       drawProb: probs.drawProb,
       awayProb: probs.awayProb,
+      k: probs.k,
       snapshot_time: snap.snapshot_time,
     });
   }
@@ -182,11 +185,15 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     return null;
   }
 
-  // Compute consensus
+  // Compute consensus via median (robust to outlier bookmakers) + renormalize
   const n = bookmakerKRs.length;
-  const homeProb = bookmakerKRs.reduce((s, b) => s + b.homeProb, 0) / n;
-  const drawProb = bookmakerKRs.reduce((s, b) => s + b.drawProb, 0) / n;
-  const awayProb = bookmakerKRs.reduce((s, b) => s + b.awayProb, 0) / n;
+  const rawHome = median(bookmakerKRs.map(b => b.homeProb));
+  const rawDraw = median(bookmakerKRs.map(b => b.drawProb));
+  const rawAway = median(bookmakerKRs.map(b => b.awayProb));
+  const total = rawHome + rawDraw + rawAway;
+  const homeProb = rawHome / total;
+  const drawProb = rawDraw / total;
+  const awayProb = rawAway / total;
 
   const homeExpectedScore = homeProb + 0.5 * drawProb;
   const awayExpectedScore = awayProb + 0.5 * drawProb;
@@ -206,9 +213,10 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
       homeProb: Number(b.homeProb.toFixed(6)),
       drawProb: Number(b.drawProb.toFixed(6)),
       awayProb: Number(b.awayProb.toFixed(6)),
+      k: b.k !== null ? Number(b.k.toFixed(6)) : null,
       snapshot_time: b.snapshot_time,
     })),
-    method: "consensus_devigged_v1",
+    method: "power_devig_median_v1.4",
   };
 
   const { error: insertErr } = await sb
@@ -412,6 +420,7 @@ export async function settleFixture(fixtureId: number): Promise<SettlementResult
       homeProb: Number(b.homeProb.toFixed(6)),
       drawProb: Number(b.drawProb.toFixed(6)),
       awayProb: Number(b.awayProb.toFixed(6)),
+      k: b.k !== null ? Number(b.k.toFixed(6)) : null,
       snapshot_time: b.snapshot_time,
     })),
     consensus: {
