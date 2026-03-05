@@ -111,6 +111,8 @@ export const ORACLE_V1_PUBLISH_ENABLED =
   process.env.ORACLE_V1_PUBLISH_ENABLED === "true";   // Future: gate published_index writes (currently unused)
 export const ORACLE_V1_LIVE_ENABLED =
   process.env.ORACLE_V1_LIVE_ENABLED === "true";      // Live layer: compute L during matches
+export const ORACLE_V1_FEEDBACK_ENABLED =
+  process.env.ORACLE_V1_FEEDBACK_ENABLED === "true";  // Mark-price feedback: F term from perp market
 
 // ─── Odds blend constants (Phase 2 — legacy) ────────────────
 // Drift signal removed — replaced by direct odds-implied Elo blend

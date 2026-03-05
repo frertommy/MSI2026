@@ -10,12 +10,14 @@
  *   2. Identify frozen teams (currently mid-match)
  *   2b. If ORACLE_V1_LIVE_ENABLED: compute L for live teams, lock M1 at kickoff value
  *   3. Refresh M1 for all non-frozen teams (parallel, max concurrency 5)
- *   4. Log cycle summary
+ *   4. If ORACLE_V1_FEEDBACK_ENABLED: apply mark-price feedback F to all teams
+ *   5. Log cycle summary
  *
  * Constraints:
  *   - Frozen teams skip M1 refresh but get live layer updates if enabled
  *   - Settlement is sequential to avoid race conditions on B_value
  *   - M1 refreshes are parallel (capped) since they're independent per team
+ *   - F is applied last, after B+M+L are finalized for the cycle
  *   - No imports from pricing-engine.ts
  *   - Feature-flagged: does nothing if ORACLE_V1_ENABLED is false
  */
@@ -24,7 +26,8 @@ import { getSupabase } from "../api/supabase-client.js";
 import { settleFixture } from "./oracle-v1-settlement.js";
 import { refreshM1 } from "./oracle-v1-market.js";
 import { computeLiveLayer } from "./oracle-v1-live.js";
-import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED } from "../config.js";
+import { computeFeedback } from "./oracle-v1-feedback.js";
+import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED, ORACLE_V1_FEEDBACK_ENABLED } from "../config.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -40,6 +43,7 @@ interface CycleResult {
   frozen_teams: string[];
   live_updated: number;
   live_frozen: number;
+  feedback_applied: number;
   elapsed_ms: number;
 }
 
@@ -101,6 +105,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       frozen_teams: [],
       live_updated: 0,
       live_frozen: 0,
+      feedback_applied: 0,
       elapsed_ms: 0,
     };
   }
@@ -129,6 +134,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       frozen_teams: [],
       live_updated: 0,
       live_frozen: 0,
+      feedback_applied: 0,
       elapsed_ms: Date.now() - cycleStart,
     };
   }
@@ -265,6 +271,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       frozen_teams: [...frozenTeams],
       live_updated: 0,
       live_frozen: 0,
+      feedback_applied: 0,
       elapsed_ms: Date.now() - cycleStart,
     };
   }
@@ -369,13 +376,88 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     }
   }
 
-  // ── Step 4: Log cycle summary ─────────────────────────────
+  // ── Step 4: Apply mark-price feedback F ────────────────────
+  let feedbackApplied = 0;
+
+  if (ORACLE_V1_FEEDBACK_ENABLED) {
+    // Build next-kickoff lookup for regime detection
+    const teamNextKickoff = new Map<string, number>();
+    const { data: upcomingMatches } = await sb
+      .from("matches")
+      .select("home_team, away_team, commence_time")
+      .eq("status", "upcoming")
+      .not("commence_time", "is", null)
+      .order("commence_time", { ascending: true })
+      .limit(200);
+
+    if (upcomingMatches) {
+      for (const m of upcomingMatches) {
+        const kickoffMs = new Date(m.commence_time).getTime();
+        // First occurrence per team = their soonest fixture
+        if (!teamNextKickoff.has(m.home_team)) teamNextKickoff.set(m.home_team, kickoffMs);
+        if (!teamNextKickoff.has(m.away_team)) teamNextKickoff.set(m.away_team, kickoffMs);
+      }
+    }
+
+    // Get all teams' current state to compute F
+    const { data: allStates } = await sb
+      .from("team_oracle_state")
+      .select("team_id, b_value, m1_value, l_value, m1_locked, published_index");
+
+    if (allStates) {
+      for (const state of allStates) {
+        const team = state.team_id as string;
+        const B = Number(state.b_value);
+        const isLive = frozenTeams.has(team);
+        const M = isLive ? Number(state.m1_locked ?? 0) : Number(state.m1_value);
+        const L = Number(state.l_value ?? 0);
+        const naiveIndex = B + M + L;
+
+        const regime = determineRegime(team, frozenTeams, teamNextKickoff);
+        const feedback = await computeFeedback(team, naiveIndex, regime);
+
+        if (feedback.F !== 0) {
+          const newIndex = naiveIndex + feedback.F;
+          const now = new Date().toISOString();
+
+          await sb
+            .from("team_oracle_state")
+            .update({
+              f_value: Number(feedback.F.toFixed(4)),
+              published_index: Number(newIndex.toFixed(4)),
+              updated_at: now,
+            })
+            .eq("team_id", team);
+
+          feedbackApplied++;
+        } else {
+          // F=0 but published_index might have stale F from last cycle — reset
+          // Only write if there's actually a difference to avoid unnecessary updates
+          const currentPublished = Number(state.published_index);
+          const expectedPublished = naiveIndex;
+          if (Math.abs(currentPublished - expectedPublished) > 0.01) {
+            await sb
+              .from("team_oracle_state")
+              .update({
+                f_value: 0,
+                published_index: Number(expectedPublished.toFixed(4)),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("team_id", team);
+          }
+        }
+      }
+    }
+  }
+
+  // ── Step 5: Log cycle summary ─────────────────────────────
   const elapsed = Date.now() - cycleStart;
 
   log.info(
     `Oracle V1 cycle complete in ${(elapsed / 1000).toFixed(1)}s — ` +
     `settled=${settledCount} bootstrapped=${bootstrapCount} M1=${m1Refreshed}/${teamsToRefresh.length} ` +
-    `frozen=${frozenTeams.size} live=${liveUpdated}/${liveUpdated + liveFrozen} errors=${settledErrors + m1Errors}`
+    `live=${liveUpdated}/${frozenTeams.size} frozen=${liveFrozen} ` +
+    `feedback=${feedbackApplied} errors=${settledErrors + m1Errors}`
   );
 
   return {
@@ -388,6 +470,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     frozen_teams: [...frozenTeams],
     live_updated: liveUpdated,
     live_frozen: liveFrozen,
+    feedback_applied: feedbackApplied,
     elapsed_ms: elapsed,
   };
 }
@@ -400,6 +483,28 @@ function deriveSeason(date: string): string {
   const month = d.getMonth() + 1;
   if (month >= 7) return `${year}-${(year + 1).toString().slice(2)}`;
   return `${year - 1}-${year.toString().slice(2)}`;
+}
+
+/**
+ * Determine the oracle regime for a team.
+ * - "live" if the team is currently in a live match
+ * - "prematch" if their next fixture kicks off within 3 hours
+ * - "between" if in-season (has upcoming fixture > 3h away)
+ * - "offseason" if no upcoming fixture
+ */
+function determineRegime(
+  team: string,
+  frozenTeams: Set<string>,
+  teamNextKickoff: Map<string, number>
+): "live" | "prematch" | "between" | "offseason" {
+  if (frozenTeams.has(team)) return "live";
+
+  const kickoffMs = teamNextKickoff.get(team);
+  if (!kickoffMs) return "offseason";
+
+  const hoursToKickoff = (kickoffMs - Date.now()) / (3600 * 1000);
+  if (hoursToKickoff <= 3 && hoursToKickoff > 0) return "prematch";
+  return "between";
 }
 
 /** Fetch ALL finished matches (paginated). Returns null on error. */
