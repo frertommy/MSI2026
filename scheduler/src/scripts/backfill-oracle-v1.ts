@@ -25,7 +25,7 @@ const DRY_RUN = process.argv.includes("--dry-run") || (!FORCE && !process.argv.i
 
 // ─── Constants ──────────────────────────────────────────────
 const SEED_CLAMP_MIN = 1300;
-const SEED_CLAMP_MAX = 1700;
+const SEED_CLAMP_MAX = 2100;
 const SEASON = "2025-26";
 
 const LEGACY_URL = "https://raw.githubusercontent.com/frertommy/MSI/main/data/msi_daily.json";
