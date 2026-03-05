@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
   ReferenceDot,
 } from "recharts";
-import type { TeamOracleRow, SettlementRow, MatchRow } from "./page";
+import type { TeamOracleRow, SettlementRow, MatchRow, PriceHistoryRow } from "./page";
 
 // ─── Constants ───────────────────────────────────────────────
 
@@ -85,14 +85,34 @@ type SortKey =
   | "last_delta_B"
   | "settled_count";
 
-interface BChartPoint {
+interface ChartPoint {
+  /** The corrected date used for x-axis (match date for settlements, real ts for market_refresh, season start for bootstrap) */
   date: string;
-  B_after: number;
-  result: "W" | "D" | "L";
-  delta_B: number;
-  opponent: string;
-  fixture_id: number;
+  /** Raw timestamp from oracle_price_history */
+  rawTimestamp: string;
+  published_index: number;
+  B_value: number;
+  M1_value: number;
+  publish_reason: string;
+  /** Only present for settlement rows */
+  result?: "W" | "D" | "L";
+  delta_B?: number;
+  opponent?: string;
+  fixture_id?: number;
 }
+
+type YAxisMode = "price" | "index";
+type Timeframe = "1W" | "1M" | "3M" | "6M" | "SEASON";
+
+const TIMEFRAME_DAYS: Record<Timeframe, number> = {
+  "1W": 7,
+  "1M": 30,
+  "3M": 90,
+  "6M": 180,
+  SEASON: 9999, // effectively no limit
+};
+
+const SEASON_START = "2025-08-01";
 
 // ─── Props ──────────────────────────────────────────────────
 
@@ -100,6 +120,7 @@ interface Props {
   teamStates: TeamOracleRow[];
   settlements: SettlementRow[];
   matches: MatchRow[];
+  priceHistory: PriceHistoryRow[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -162,11 +183,13 @@ function Sparkline({ values }: { values: number[] }) {
 
 // ─── Main Client Component ─────────────────────────────────
 
-export function OracleV1Client({ teamStates, settlements, matches }: Props) {
+export function OracleV1Client({ teamStates, settlements, matches, priceHistory }: Props) {
   const [activeLeague, setActiveLeague] = useState<string>("All");
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("published_index");
   const [sortAsc, setSortAsc] = useState(false);
+  const [yAxisMode, setYAxisMode] = useState<YAxisMode>("price");
+  const [timeframe, setTimeframe] = useState<Timeframe>("SEASON");
 
   // ── Derived lookups ────────────────────────────────────────
 
@@ -209,6 +232,40 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
       if (s.trace_payload && s.trace_payload.error) continue; // skip failures
       if (!map.has(s.team_id)) map.set(s.team_id, []);
       map.get(s.team_id)!.push(s);
+    }
+    return map;
+  }, [settlements]);
+
+  // Price history by team
+  const priceHistoryByTeam = useMemo(() => {
+    const map = new Map<string, PriceHistoryRow[]>();
+    for (const ph of priceHistory) {
+      if (!map.has(ph.team)) map.set(ph.team, []);
+      map.get(ph.team)!.push(ph);
+    }
+    return map;
+  }, [priceHistory]);
+
+  // Earliest match date per team (for bootstrap rows)
+  const earliestMatchDate = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of matches) {
+      for (const t of [m.home_team, m.away_team]) {
+        const existing = map.get(t);
+        if (!existing || m.date < existing) {
+          map.set(t, m.date);
+        }
+      }
+    }
+    return map;
+  }, [matches]);
+
+  // Settlement lookup: fixture_id+team → SettlementRow (for result/delta on chart)
+  const settlementLookup = useMemo(() => {
+    const map = new Map<string, SettlementRow>();
+    for (const s of settlements) {
+      if (s.trace_payload && s.trace_payload.error) continue;
+      map.set(`${s.fixture_id}:${s.team_id}`, s);
     }
     return map;
   }, [settlements]);
@@ -300,39 +357,96 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
     return counts;
   }, [tableRows]);
 
-  // ── Chart data for selected team ──────────────────────────
+  // ── Chart data for selected team (from oracle_price_history) ──
 
-  const selectedData = useMemo(() => {
+  const selectedData = useMemo((): ChartPoint[] | null => {
     const team = selectedTeam;
     if (!team) return null;
 
-    const teamSettlements = settlementsByTeam.get(team) ?? [];
-    if (teamSettlements.length === 0) return null;
+    const rows = priceHistoryByTeam.get(team);
+    if (!rows || rows.length === 0) return null;
 
-    // Chronological order (reverse from DESC)
-    const chronological = [...teamSettlements].reverse();
+    const points: ChartPoint[] = [];
+    for (const ph of rows) {
+      let date: string;
 
-    const chartPoints: BChartPoint[] = [];
-    for (const s of chronological) {
-      const match = matchById.get(s.fixture_id);
-      const opponent = match
-        ? match.home_team === team
-          ? match.away_team
-          : match.home_team
-        : "Unknown";
+      if (ph.publish_reason === "settlement" && ph.source_fixture_id != null) {
+        // Use the actual match date, not the backfill timestamp
+        const match = matchById.get(ph.source_fixture_id);
+        date = match ? match.date.slice(0, 10) : ph.timestamp.slice(0, 10);
+      } else if (ph.publish_reason === "market_refresh" || ph.publish_reason === "live_update") {
+        // Real-time M1 updates — timestamp is correct
+        date = ph.timestamp.slice(0, 10);
+      } else if (ph.publish_reason === "bootstrap") {
+        // Use earliest match date for team, or season start
+        date = earliestMatchDate.get(team)?.slice(0, 10) ?? SEASON_START;
+      } else {
+        date = ph.timestamp.slice(0, 10);
+      }
 
-      chartPoints.push({
-        date: s.settled_at.slice(0, 10),
-        B_after: Number(s.B_after),
-        result: resultFromS(Number(s.actual_score_S)),
-        delta_B: Number(s.delta_B),
-        opponent,
-        fixture_id: s.fixture_id,
-      });
+      const point: ChartPoint = {
+        date,
+        rawTimestamp: ph.timestamp,
+        published_index: Number(ph.published_index),
+        B_value: Number(ph.B_value),
+        M1_value: Number(ph.M1_value),
+        publish_reason: ph.publish_reason,
+      };
+
+      // Enrich settlement points with result info
+      if (ph.publish_reason === "settlement" && ph.source_fixture_id != null) {
+        const sKey = `${ph.source_fixture_id}:${team}`;
+        const settlement = settlementLookup.get(sKey);
+        if (settlement) {
+          point.result = resultFromS(Number(settlement.actual_score_S));
+          point.delta_B = Number(settlement.delta_B);
+        }
+        const match = matchById.get(ph.source_fixture_id);
+        if (match) {
+          point.opponent =
+            match.home_team === team ? match.away_team : match.home_team;
+        }
+        point.fixture_id = ph.source_fixture_id;
+      }
+
+      points.push(point);
     }
 
-    return chartPoints;
-  }, [selectedTeam, settlementsByTeam, matchById]);
+    // Sort by date (corrected), then by rawTimestamp within same date
+    points.sort((a, b) => {
+      const cmp = a.date.localeCompare(b.date);
+      if (cmp !== 0) return cmp;
+      return a.rawTimestamp.localeCompare(b.rawTimestamp);
+    });
+
+    return points;
+  }, [selectedTeam, priceHistoryByTeam, matchById, earliestMatchDate, settlementLookup]);
+
+  // ── Filtered chart data by timeframe ──────────────────────
+
+  const filteredChartData = useMemo((): ChartPoint[] | null => {
+    if (!selectedData || selectedData.length === 0) return selectedData;
+
+    const days = TIMEFRAME_DAYS[timeframe];
+    if (days >= 9999) return selectedData; // SEASON — show all
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    const filtered = selectedData.filter((p) => p.date >= cutoffStr);
+
+    // If no data in range, show last known value as flat line
+    if (filtered.length === 0 && selectedData.length > 0) {
+      const lastPoint = selectedData[selectedData.length - 1];
+      return [
+        { ...lastPoint, date: cutoffStr },
+        { ...lastPoint },
+      ];
+    }
+
+    return filtered;
+  }, [selectedData, timeframe]);
 
   const selectedState = useMemo(
     () => teamStates.find((t) => t.team_id === selectedTeam) ?? null,
@@ -387,7 +501,7 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
       </div>
 
       {/* Chart (shown when a team is selected) */}
-      {selectedTeam && selectedData && selectedData.length > 0 && selectedState && (
+      {selectedTeam && filteredChartData && filteredChartData.length > 0 && selectedState && (
         <div className="border border-border rounded-lg p-4 bg-surface">
           {/* Chart header */}
           <div className="flex items-center gap-3 mb-3">
@@ -417,11 +531,48 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
             </span>
           </div>
 
-          {/* Recharts B_after over time */}
+          {/* Toggle row: $PRICE / INDEX + Timeframe */}
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            {/* Y-axis mode toggle */}
+            <div className="flex rounded border border-border overflow-hidden">
+              {(["price", "index"] as YAxisMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setYAxisMode(mode)}
+                  className={`px-3 py-1 text-xs font-bold font-mono uppercase tracking-wider transition-all ${
+                    yAxisMode === mode
+                      ? "bg-foreground text-background"
+                      : "bg-transparent text-muted hover:text-foreground"
+                  }`}
+                >
+                  {mode === "price" ? "$PRICE" : "INDEX"}
+                </button>
+              ))}
+            </div>
+
+            {/* Timeframe toggle */}
+            <div className="flex rounded border border-border overflow-hidden ml-auto">
+              {(["1W", "1M", "3M", "6M", "SEASON"] as Timeframe[]).map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => setTimeframe(tf)}
+                  className={`px-2.5 py-1 text-xs font-bold font-mono tracking-wider transition-all ${
+                    timeframe === tf
+                      ? "bg-foreground text-background"
+                      : "bg-transparent text-muted hover:text-foreground"
+                  }`}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Recharts — published_index over corrected dates */}
           <div style={{ width: "100%", height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
-                data={selectedData}
+                data={filteredChartData}
                 margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
               >
                 <XAxis
@@ -440,37 +591,54 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
                   tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
                   axisLine={false}
                   tickLine={false}
-                  width={50}
-                  tickFormatter={(v: number) => v.toFixed(1)}
+                  width={yAxisMode === "price" ? 60 : 50}
+                  tickFormatter={(v: number) =>
+                    yAxisMode === "price"
+                      ? `$${indexToPrice(v).toFixed(2)}`
+                      : v.toFixed(1)
+                  }
                 />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   content={({ active, payload }) => {
                     if (!active || !payload || payload.length === 0) return null;
-                    const pt = payload[0].payload as BChartPoint;
+                    const pt = payload[0].payload as ChartPoint;
+                    const displayVal =
+                      yAxisMode === "price"
+                        ? `$${indexToPrice(pt.published_index).toFixed(2)}`
+                        : pt.published_index.toFixed(1);
                     return (
                       <div style={tooltipStyle} className="p-2">
                         <div className="text-foreground font-bold">{pt.date}</div>
-                        <div className="text-muted">vs {pt.opponent}</div>
-                        <div>
-                          <span
-                            style={{ color: RESULT_COLOR[pt.result] }}
-                          >
-                            {pt.result}
-                          </span>
-                          {" · "}
-                          <span
-                            className={
-                              pt.delta_B >= 0 ? "text-accent-green" : "text-accent-red"
-                            }
-                            style={{ color: pt.delta_B >= 0 ? "#00e676" : "#ff1744" }}
-                          >
-                            {pt.delta_B >= 0 ? "+" : ""}
-                            {pt.delta_B.toFixed(2)}
-                          </span>
-                        </div>
+                        {pt.opponent && (
+                          <div className="text-muted">vs {pt.opponent}</div>
+                        )}
+                        {pt.result && pt.delta_B != null && (
+                          <div>
+                            <span style={{ color: RESULT_COLOR[pt.result] }}>
+                              {pt.result}
+                            </span>
+                            {" · "}
+                            <span
+                              style={{ color: pt.delta_B >= 0 ? "#00e676" : "#ff1744" }}
+                            >
+                              {pt.delta_B >= 0 ? "+" : ""}
+                              {pt.delta_B.toFixed(2)}
+                            </span>
+                          </div>
+                        )}
+                        {!pt.result && (
+                          <div className="text-muted text-[10px]">
+                            {pt.publish_reason === "market_refresh" || pt.publish_reason === "live_update"
+                              ? "M1 update"
+                              : pt.publish_reason}
+                          </div>
+                        )}
                         <div className="text-foreground">
-                          B = {pt.B_after.toFixed(2)}
+                          {yAxisMode === "price" ? "Price" : "Index"} = {displayVal}
+                        </div>
+                        <div className="text-muted text-[10px]">
+                          B={pt.B_value.toFixed(1)} M1={pt.M1_value >= 0 ? "+" : ""}{pt.M1_value.toFixed(1)}
                         </div>
                       </div>
                     );
@@ -478,23 +646,25 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
                 />
                 <Line
                   type="monotone"
-                  dataKey="B_after"
+                  dataKey="published_index"
                   stroke="#00e676"
                   dot={false}
                   strokeWidth={1.5}
                   connectNulls
                 />
-                {/* Result markers */}
-                {selectedData.map((pt, i) => (
-                  <ReferenceDot
-                    key={i}
-                    x={pt.date}
-                    y={pt.B_after}
-                    r={4}
-                    fill={RESULT_COLOR[pt.result]}
-                    stroke="none"
-                  />
-                ))}
+                {/* Result markers (settlement points only) */}
+                {filteredChartData
+                  .filter((pt) => pt.result)
+                  .map((pt, i) => (
+                    <ReferenceDot
+                      key={i}
+                      x={pt.date}
+                      y={pt.published_index}
+                      r={4}
+                      fill={RESULT_COLOR[pt.result!]}
+                      stroke="none"
+                    />
+                  ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -505,6 +675,12 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
               Price{" "}
               <span className="text-foreground font-bold">
                 ${indexToPrice(Number(selectedState.published_index)).toFixed(2)}
+              </span>
+            </span>
+            <span>
+              Index{" "}
+              <span className="text-foreground font-bold">
+                {Number(selectedState.published_index).toFixed(1)}
               </span>
             </span>
             <span>

@@ -38,6 +38,19 @@ export interface MatchRow {
   commence_time: string | null;
 }
 
+export interface PriceHistoryRow {
+  id: number;
+  team: string;
+  league: string;
+  timestamp: string;
+  B_value: number;
+  M1_value: number;
+  published_index: number;
+  confidence_score: number | null;
+  source_fixture_id: number | null;
+  publish_reason: string;
+}
+
 export const dynamic = "force-dynamic";
 
 // ─── Paginated fetch ────────────────────────────────────────
@@ -72,7 +85,7 @@ async function fetchAll<T>(
 
 // ─── Server component ──────────────────────────────────────
 export default async function OracleV1Page() {
-  const [teamStates, settlements, matches] = await Promise.all([
+  const [teamStates, settlements, matches, priceHistory] = await Promise.all([
     fetchAll<TeamOracleRow>(
       "team_oracle_state",
       "team_id, season, B_value:b_value, M1_value:m1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts, updated_at"
@@ -90,6 +103,13 @@ export default async function OracleV1Page() {
       undefined,
       "date",
       true
+    ),
+    fetchAll<PriceHistoryRow>(
+      "oracle_price_history",
+      "id, team, league, timestamp, B_value:b_value, M1_value:m1_value, published_index, confidence_score, source_fixture_id, publish_reason",
+      undefined,
+      "timestamp",
+      true // chronological
     ),
   ]);
 
@@ -127,6 +147,7 @@ export default async function OracleV1Page() {
             teamStates={teamStates}
             settlements={settlements}
             matches={matches}
+            priceHistory={priceHistory}
           />
         )}
       </main>
