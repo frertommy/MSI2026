@@ -419,7 +419,25 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
       return a.rawTimestamp.localeCompare(b.rawTimestamp);
     });
 
-    return points;
+    // Deduplicate: for market_refresh/live_update, keep only the LATEST per date.
+    // There can be dozens of M1 refreshes per day — chart only needs final state.
+    const deduped: ChartPoint[] = [];
+    const seenRefreshDate = new Set<string>();
+
+    // Walk backwards so we encounter the latest refresh first per date
+    for (let i = points.length - 1; i >= 0; i--) {
+      const pt = points[i];
+      if (pt.publish_reason === "market_refresh" || pt.publish_reason === "live_update") {
+        if (seenRefreshDate.has(pt.date)) continue; // skip older refreshes on same date
+        seenRefreshDate.add(pt.date);
+      }
+      deduped.push(pt);
+    }
+
+    // Reverse back to chronological
+    deduped.reverse();
+
+    return deduped;
   }, [selectedTeam, priceHistoryByTeam, matchById, earliestMatchDate, settlementLookup]);
 
   // ── Filtered chart data by timeframe ──────────────────────
