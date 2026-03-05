@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   LineChart,
   Line,
@@ -122,7 +122,6 @@ interface Props {
   teamStates: TeamOracleRow[];
   settlements: SettlementRow[];
   matches: MatchRow[];
-  priceHistory: PriceHistoryRow[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -185,13 +184,46 @@ function Sparkline({ values }: { values: number[] }) {
 
 // ─── Main Client Component ─────────────────────────────────
 
-export function OracleV1Client({ teamStates, settlements, matches, priceHistory }: Props) {
+export function OracleV1Client({ teamStates, settlements, matches }: Props) {
   const [activeLeague, setActiveLeague] = useState<string>("All");
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("published_index");
   const [sortAsc, setSortAsc] = useState(false);
   const [yAxisMode, setYAxisMode] = useState<YAxisMode>("price");
   const [timeframe, setTimeframe] = useState<Timeframe>("SEASON");
+
+  // ── On-demand price history (lazy-loaded per team) ────────
+  const [priceHistoryCache, setPriceHistoryCache] = useState<Map<string, PriceHistoryRow[]>>(new Map());
+  const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
+  const fetchingRef = useRef<string | null>(null);
+
+  const fetchPriceHistory = useCallback(async (team: string) => {
+    if (priceHistoryCache.has(team)) return; // already cached
+    if (fetchingRef.current === team) return; // already in-flight
+    fetchingRef.current = team;
+    setPriceHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/price-history?team=${encodeURIComponent(team)}`);
+      if (res.ok) {
+        const data: PriceHistoryRow[] = await res.json();
+        setPriceHistoryCache((prev) => {
+          const next = new Map(prev);
+          next.set(team, data);
+          return next;
+        });
+      }
+    } finally {
+      setPriceHistoryLoading(false);
+      fetchingRef.current = null;
+    }
+  }, [priceHistoryCache]);
+
+  // Fetch price history when team is selected
+  useEffect(() => {
+    if (selectedTeam) {
+      fetchPriceHistory(selectedTeam);
+    }
+  }, [selectedTeam, fetchPriceHistory]);
 
   // ── Derived lookups ────────────────────────────────────────
 
@@ -231,22 +263,12 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
   const settlementsByTeam = useMemo(() => {
     const map = new Map<string, SettlementRow[]>();
     for (const s of settlements) {
-      if (s.trace_payload && s.trace_payload.error) continue; // skip failures
+      if (s.has_error) continue; // skip failures
       if (!map.has(s.team_id)) map.set(s.team_id, []);
       map.get(s.team_id)!.push(s);
     }
     return map;
   }, [settlements]);
-
-  // Price history by team
-  const priceHistoryByTeam = useMemo(() => {
-    const map = new Map<string, PriceHistoryRow[]>();
-    for (const ph of priceHistory) {
-      if (!map.has(ph.team)) map.set(ph.team, []);
-      map.get(ph.team)!.push(ph);
-    }
-    return map;
-  }, [priceHistory]);
 
   // Earliest match date per team (for bootstrap rows)
   const earliestMatchDate = useMemo(() => {
@@ -266,7 +288,7 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
   const settlementLookup = useMemo(() => {
     const map = new Map<string, SettlementRow>();
     for (const s of settlements) {
-      if (s.trace_payload && s.trace_payload.error) continue;
+      if (s.has_error) continue;
       map.set(`${s.fixture_id}:${s.team_id}`, s);
     }
     return map;
@@ -359,14 +381,16 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
     return counts;
   }, [tableRows]);
 
-  // ── Chart data for selected team (from oracle_price_history) ──
+  // ── Chart data for selected team (from lazy-loaded price history) ──
 
   const selectedData = useMemo((): ChartPoint[] | null => {
     const team = selectedTeam;
     if (!team) return null;
 
-    const rows = priceHistoryByTeam.get(team);
+    const rows = priceHistoryCache.get(team);
     if (!rows || rows.length === 0) return null;
+
+    // No client-side dedup needed — server already deduplicates market_refresh rows
 
     const points: ChartPoint[] = [];
     for (const ph of rows) {
@@ -422,26 +446,8 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
       return a.rawTimestamp.localeCompare(b.rawTimestamp);
     });
 
-    // Deduplicate: for market_refresh/live_update, keep only the LATEST per date.
-    // There can be dozens of M1 refreshes per day — chart only needs final state.
-    const deduped: ChartPoint[] = [];
-    const seenRefreshDate = new Set<string>();
-
-    // Walk backwards so we encounter the latest refresh first per date
-    for (let i = points.length - 1; i >= 0; i--) {
-      const pt = points[i];
-      if (pt.publish_reason === "market_refresh" || pt.publish_reason === "live_update") {
-        if (seenRefreshDate.has(pt.date)) continue; // skip older refreshes on same date
-        seenRefreshDate.add(pt.date);
-      }
-      deduped.push(pt);
-    }
-
-    // Reverse back to chronological
-    deduped.reverse();
-
-    return deduped;
-  }, [selectedTeam, priceHistoryByTeam, matchById, earliestMatchDate, settlementLookup]);
+    return points;
+  }, [selectedTeam, priceHistoryCache, matchById, earliestMatchDate, settlementLookup]);
 
   // ── Filtered chart data by timeframe ──────────────────────
 
@@ -522,7 +528,28 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
         ))}
       </div>
 
-      {/* Chart (shown when a team is selected) */}
+      {/* Loading state for price history */}
+      {selectedTeam && priceHistoryLoading && !priceHistoryCache.has(selectedTeam) && (
+        <div className="border border-border rounded-lg p-4 bg-surface">
+          <div className="flex items-center gap-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+              style={{
+                backgroundColor:
+                  LEAGUE_DOT_COLOR[teamLeague.get(selectedTeam) ?? ""] ?? "#888",
+              }}
+            />
+            <span className="font-bold text-foreground text-sm">
+              {selectedTeam}
+            </span>
+            <span className="text-xs text-muted font-mono ml-auto animate-pulse">
+              Loading chart data...
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Chart (shown when a team is selected and data is loaded) */}
       {selectedTeam && filteredChartData && filteredChartData.length > 0 && selectedState && (
         <div className="border border-border rounded-lg p-4 bg-surface">
           {/* Chart header */}

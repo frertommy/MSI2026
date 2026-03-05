@@ -1,3 +1,24 @@
+/**
+ * Oracle V1 — Server Component
+ *
+ * Data fetched on page load (initial payload):
+ *   - team_oracle_state: ~125 rows (team rankings table)
+ *   - settlement_log: ~2,500 rows (without trace_payload — stripped for perf)
+ *   - matches: ~4,800 rows (fixture lookup for chart enrichment)
+ *
+ * Data fetched on demand (lazy, per team click):
+ *   - oracle_price_history: ~30–100 rows per team via GET /api/price-history?team=X
+ *     (market_refresh rows deduplicated server-side — only latest per date)
+ *
+ * Estimated initial payload reduction:
+ *   - Removed oracle_price_history from SSR props: ~10,000+ rows eliminated
+ *   - Removed trace_payload JSON blobs from settlements: ~500KB–1MB eliminated
+ *
+ * Remaining large fetches that could be further optimized:
+ *   - matches table (~4,800 rows) — could be reduced to only teams in team_oracle_state
+ *   - settlement_log (~2,500 rows) — could paginate or lazy-load per team
+ */
+
 import { supabase } from "@/lib/supabase";
 import { OracleV1Client } from "./oracle-v1-client";
 
@@ -24,7 +45,7 @@ export interface SettlementRow {
   B_before: number;
   B_after: number;
   settled_at: string;
-  trace_payload: Record<string, unknown> | null;
+  has_error: boolean;
 }
 
 export interface MatchRow {
@@ -83,16 +104,29 @@ async function fetchAll<T>(
   return all;
 }
 
+// ─── Raw settlement type (before has_error transform) ───────
+interface RawSettlementRow {
+  settlement_id: number;
+  fixture_id: number;
+  team_id: string;
+  E_KR: number;
+  actual_score_S: number;
+  delta_B: number;
+  B_before: number;
+  B_after: number;
+  settled_at: string;
+}
+
 // ─── Server component ──────────────────────────────────────
 export default async function OracleV1Page() {
-  const [teamStates, settlements, matches, priceHistory] = await Promise.all([
+  const [teamStates, rawSettlements, matches] = await Promise.all([
     fetchAll<TeamOracleRow>(
       "team_oracle_state",
       "team_id, season, B_value:b_value, M1_value:m1_value, published_index, confidence_score, next_fixture_id, last_market_refresh_ts, updated_at"
     ),
-    fetchAll<SettlementRow>(
+    fetchAll<RawSettlementRow>(
       "settlement_log",
-      "settlement_id, fixture_id, team_id, E_KR:e_kr, actual_score_S:actual_score_s, delta_B:delta_b, B_before:b_before, B_after:b_after, settled_at, trace_payload",
+      "settlement_id, fixture_id, team_id, E_KR:e_kr, actual_score_S:actual_score_s, delta_B:delta_b, B_before:b_before, B_after:b_after, settled_at",
       undefined,
       "settled_at",
       false // most recent first
@@ -104,19 +138,17 @@ export default async function OracleV1Page() {
       "date",
       true
     ),
-    fetchAll<PriceHistoryRow>(
-      "oracle_price_history",
-      "id, team, league, timestamp, B_value:b_value, M1_value:m1_value, published_index, confidence_score, source_fixture_id, publish_reason",
-      undefined,
-      "timestamp",
-      true // chronological
-    ),
   ]);
 
+  // Compute has_error server-side (replaces trace_payload.error check)
+  // Error settlements have delta_b = 0 and b_before = 0
+  const settlements: SettlementRow[] = rawSettlements.map((s) => ({
+    ...s,
+    has_error: Number(s.delta_B) === 0 && Number(s.B_before) === 0,
+  }));
+
   const teamCount = teamStates.length;
-  const settlementCount = settlements.filter(
-    (s) => !s.trace_payload || !s.trace_payload.error
-  ).length;
+  const settlementCount = settlements.filter((s) => !s.has_error).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -147,7 +179,6 @@ export default async function OracleV1Page() {
             teamStates={teamStates}
             settlements={settlements}
             matches={matches}
-            priceHistory={priceHistory}
           />
         )}
       </main>
