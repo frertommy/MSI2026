@@ -88,6 +88,8 @@ type SortKey =
 interface ChartPoint {
   /** The corrected date used for x-axis (match date for settlements, real ts for market_refresh, season start for bootstrap) */
   date: string;
+  /** Numeric epoch ms for proportional x-axis spacing */
+  dateTs: number;
   /** Raw timestamp from oracle_price_history */
   rawTimestamp: string;
   published_index: number;
@@ -386,6 +388,7 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
 
       const point: ChartPoint = {
         date,
+        dateTs: new Date(date + "T00:00:00Z").getTime(),
         rawTimestamp: ph.timestamp,
         published_index: Number(ph.published_index),
         B_value: Number(ph.B_value),
@@ -457,9 +460,10 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
     // If no data in range, show last known value as flat line
     if (filtered.length === 0 && selectedData.length > 0) {
       const lastPoint = selectedData[selectedData.length - 1];
+      const todayStr = new Date().toISOString().slice(0, 10);
       return [
-        { ...lastPoint, date: cutoffStr },
-        { ...lastPoint },
+        { ...lastPoint, date: cutoffStr, dateTs: new Date(cutoffStr + "T00:00:00Z").getTime() },
+        { ...lastPoint, date: todayStr, dateTs: new Date(todayStr + "T00:00:00Z").getTime() },
       ];
     }
 
@@ -594,13 +598,16 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
                 margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
               >
                 <XAxis
-                  dataKey="date"
+                  dataKey="dateTs"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
                   tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
                   axisLine={{ stroke: "#333" }}
                   tickLine={false}
-                  tickFormatter={(v: string) => {
+                  tickFormatter={(v: number) => {
                     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                    const d = new Date(v + "T00:00:00Z");
+                    const d = new Date(v);
                     return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
                   }}
                 />
@@ -676,7 +683,7 @@ export function OracleV1Client({ teamStates, settlements, matches, priceHistory 
                   .map((pt, i) => (
                     <ReferenceDot
                       key={i}
-                      x={pt.date}
+                      x={pt.dateTs}
                       y={pt.published_index}
                       r={4}
                       fill={RESULT_COLOR[pt.result!]}
