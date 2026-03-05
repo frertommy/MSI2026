@@ -196,7 +196,44 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     return { updated: false, skipped_reason: "odds_query_error" };
   }
 
-  const allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+  let allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+
+  // ── Fallback: fixture ID mismatch between API-Football and Odds API ──
+  // API-Football and The Odds API assign different fixture IDs for the same match
+  // (especially non-EPL leagues). If no odds under the primary ID, search by team+date.
+  if (allSnapshots.length === 0) {
+    const matchDate = nextFixture.date; // YYYY-MM-DD
+    const dayBefore = new Date(new Date(matchDate).getTime() - 86400000).toISOString().slice(0, 10);
+    const dayAfter = new Date(new Date(matchDate).getTime() + 86400000).toISOString().slice(0, 10);
+
+    const { data: altFixtures } = await sb
+      .from("matches")
+      .select("fixture_id")
+      .eq("home_team", nextFixture.home_team)
+      .eq("away_team", nextFixture.away_team)
+      .gte("date", dayBefore)
+      .lte("date", dayAfter)
+      .neq("fixture_id", nextFixture.fixture_id);
+
+    if (altFixtures && altFixtures.length > 0) {
+      const altId = altFixtures[0].fixture_id as number;
+
+      const { data: altOdds } = await sb
+        .from("odds_snapshots")
+        .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+        .eq("fixture_id", altId)
+        .lt("snapshot_time", kickoffTs)
+        .order("snapshot_time", { ascending: false });
+
+      if (altOdds && altOdds.length > 0) {
+        allSnapshots = altOdds as OddsSnapshotRow[];
+        log.info(
+          `M1 fixture fallback: ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
+          `using alt ${altId} (${allSnapshots.length} snapshots)`
+        );
+      }
+    }
+  }
 
   // Latest valid snapshot per bookmaker
   const latestByBook = new Map<string, OddsSnapshotRow>();
