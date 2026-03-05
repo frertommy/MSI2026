@@ -96,11 +96,14 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   // ── Step 2: Find next competitive fixture ────────────────
   const now = new Date().toISOString();
 
+  const today = new Date().toISOString().slice(0, 10);
+
   const { data: nextFixtures, error: nextErr } = await sb
     .from("matches")
     .select("fixture_id, date, home_team, away_team, commence_time")
     .or(`home_team.eq.${team},away_team.eq.${team}`)
     .eq("status", "upcoming")
+    .gte("date", today)
     .order("date", { ascending: true })
     .order("commence_time", { ascending: true, nullsFirst: true })
     .limit(1);
@@ -344,7 +347,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   const M1_raw = R_market_fixture - B_value;
 
   // Horizon decay: fixture further away = less confident
-  const HORIZON_DAYS = 10;
+  const HORIZON_DAYS = 21;
   const kickoffMs = new Date(kickoffTs).getTime();
   let c_horizon = 1.0;
 
