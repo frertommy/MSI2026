@@ -130,7 +130,33 @@ interface OddsResult {
   bookmakerOdds: BookmakerOdds;
 }
 
-async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, OddsResult>> {
+function aggregateOdds(rows: OddsRow[]): OddsResult {
+  const homeProbs = rows.map(r => 1 / r.home_odds!);
+  const drawProbs = rows.map(r => 1 / r.draw_odds!);
+  const awayProbs = rows.map(r => 1 / r.away_odds!);
+
+  const rawHome = homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length;
+  const rawDraw = drawProbs.reduce((a, b) => a + b, 0) / drawProbs.length;
+  const rawAway = awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length;
+
+  const total = rawHome + rawDraw + rawAway;
+
+  const medHome = Math.round(median(rows.map(r => Number(r.home_odds!))) * 100) / 100;
+  const medDraw = Math.round(median(rows.map(r => Number(r.draw_odds!))) * 100) / 100;
+  const medAway = Math.round(median(rows.map(r => Number(r.away_odds!))) * 100) / 100;
+
+  return {
+    homeProb: rawHome / total,
+    drawProb: rawDraw / total,
+    awayProb: rawAway / total,
+    bookmakerOdds: { home: medHome, draw: medDraw, away: medAway, count: rows.length },
+  };
+}
+
+async function fetchOddsForFixtures(
+  fixtureIds: number[],
+  matches: MatchRow[]
+): Promise<Map<number, OddsResult>> {
   const map = new Map<number, OddsResult>();
   if (fixtureIds.length === 0) return map;
 
@@ -153,29 +179,62 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, O
     }
 
     for (const [fid, rows] of grouped) {
-      const homeProbs = rows.map(r => 1 / r.home_odds!);
-      const drawProbs = rows.map(r => 1 / r.draw_odds!);
-      const awayProbs = rows.map(r => 1 / r.away_odds!);
-
-      const rawHome = homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length;
-      const rawDraw = drawProbs.reduce((a, b) => a + b, 0) / drawProbs.length;
-      const rawAway = awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length;
-
-      const total = rawHome + rawDraw + rawAway;
-
-      // Median decimal odds for display
-      const medHome = Math.round(median(rows.map(r => Number(r.home_odds!))) * 100) / 100;
-      const medDraw = Math.round(median(rows.map(r => Number(r.draw_odds!))) * 100) / 100;
-      const medAway = Math.round(median(rows.map(r => Number(r.away_odds!))) * 100) / 100;
-
-      map.set(fid, {
-        homeProb: rawHome / total,
-        drawProb: rawDraw / total,
-        awayProb: rawAway / total,
-        bookmakerOdds: { home: medHome, draw: medDraw, away: medAway, count: rows.length },
-      });
+      map.set(fid, aggregateOdds(rows));
     }
   }
+
+  // ── Fallback: fixture ID mismatch between API-Football and Odds API ──
+  // Some fixtures (especially La Liga/Serie A) have odds stored under a
+  // different fixture_id. Search for alt fixtures with the same teams.
+  const missingFixtures = matches.filter(m => !map.has(m.fixture_id));
+  if (missingFixtures.length > 0) {
+    // Find alt fixture IDs: same home_team + away_team, different fixture_id, ±3 days
+    for (const m of missingFixtures) {
+      const dayBefore = new Date(new Date(m.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+      const dayAfter = new Date(new Date(m.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+      const { data: alts } = await supabase
+        .from("matches")
+        .select("fixture_id")
+        .eq("home_team", m.home_team)
+        .eq("away_team", m.away_team)
+        .gte("date", dayBefore)
+        .lte("date", dayAfter)
+        .neq("fixture_id", m.fixture_id);
+
+      if (!alts || alts.length === 0) continue;
+
+      for (const alt of alts) {
+        const altId = alt.fixture_id as number;
+        if (map.has(altId)) {
+          // Already aggregated — reuse
+          map.set(m.fixture_id, map.get(altId)!);
+          break;
+        }
+
+        // Try fetching odds for this alt fixture
+        const { data: altOdds } = await supabase
+          .from("latest_odds")
+          .select("fixture_id, home_odds, away_odds, draw_odds")
+          .eq("fixture_id", altId);
+
+        if (!altOdds || altOdds.length === 0) continue;
+
+        const validRows = (altOdds as OddsRow[]).filter(
+          r => r.home_odds && r.away_odds && r.draw_odds &&
+               r.home_odds > 0 && r.away_odds > 0 && r.draw_odds > 0
+        );
+
+        if (validRows.length === 0) continue;
+
+        const result = aggregateOdds(validRows);
+        map.set(m.fixture_id, result);
+        map.set(altId, result);
+        break;
+      }
+    }
+  }
+
   return map;
 }
 
@@ -284,7 +343,7 @@ export default async function MatchesPage() {
 
   const fixtureIds = rawMatches.map(m => m.fixture_id);
   const [oddsMap, polyMap] = await Promise.all([
-    fetchOddsForFixtures(fixtureIds),
+    fetchOddsForFixtures(fixtureIds, rawMatches),
     fetchPolymarketForFixtures(fixtureIds),
   ]);
 
