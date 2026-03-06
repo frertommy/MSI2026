@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { UpcomingMatch } from "./page";
+import type { UpcomingMatch, BookmakerOdds, PolymarketOdds } from "./page";
 
 // ─── Oracle V1.4 Constants ───────────────────────────────────
 const ORACLE_K = 30;
@@ -107,6 +107,12 @@ function formatDate(dateStr: string): string {
     day: "numeric",
     timeZone: "UTC",
   });
+}
+
+function formatVolume(v: number): string {
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
+  return `$${Math.round(v)}`;
 }
 
 // ─── Components ──────────────────────────────────────────────
@@ -243,13 +249,50 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
           </div>
         </div>
 
+        {/* Market Data: Bookmaker + Polymarket odds table */}
+        {(match.bookmaker_odds || match.polymarket) && (
+          <div className="mt-3 pt-2 border-t border-border/30">
+            <table className="w-full text-[10px] font-mono">
+              <thead>
+                <tr className="text-muted">
+                  <th className="text-left font-normal pb-1">Source</th>
+                  <th className="text-center font-normal pb-1">Home</th>
+                  <th className="text-center font-normal pb-1">Draw</th>
+                  <th className="text-center font-normal pb-1">Away</th>
+                  <th className="text-right font-normal pb-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {match.bookmaker_odds && (
+                  <tr className="text-foreground">
+                    <td className="text-left py-0.5">
+                      <span className="text-muted">Books</span>
+                    </td>
+                    <td className="text-center py-0.5 text-accent-green">{match.bookmaker_odds.home.toFixed(2)}</td>
+                    <td className="text-center py-0.5 text-accent-amber">{match.bookmaker_odds.draw.toFixed(2)}</td>
+                    <td className="text-center py-0.5 text-accent-red">{match.bookmaker_odds.away.toFixed(2)}</td>
+                    <td className="text-right py-0.5 text-muted opacity-60">{match.bookmaker_odds.count} books</td>
+                  </tr>
+                )}
+                {match.polymarket && (
+                  <tr className="text-foreground">
+                    <td className="text-left py-0.5">
+                      <span className="text-purple-400">Poly</span>
+                    </td>
+                    <td className="text-center py-0.5 text-accent-green">{(match.polymarket.homeYes * 100).toFixed(0)}¢</td>
+                    <td className="text-center py-0.5 text-accent-amber">{(match.polymarket.drawYes * 100).toFixed(0)}¢</td>
+                    <td className="text-center py-0.5 text-accent-red">{(match.polymarket.awayYes * 100).toFixed(0)}¢</td>
+                    <td className="text-right py-0.5 text-muted opacity-60">{formatVolume(match.polymarket.volume)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {/* Probability bar */}
         {probs && (
-          <div className="mt-3 pt-2 border-t border-border/30">
-            <div className="flex items-center gap-2 text-[10px] text-muted font-mono mb-1.5">
-              <span>Match Probabilities</span>
-              <span className="text-[9px] opacity-60">(odds)</span>
-            </div>
+          <div className="mt-2 pt-2 border-t border-border/30">
             <div className="flex h-2 w-full overflow-hidden rounded-full">
               <div
                 className="bg-accent-green transition-all"

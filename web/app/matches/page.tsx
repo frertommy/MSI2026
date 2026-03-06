@@ -26,9 +26,30 @@ interface OddsRow {
   draw_odds: number | null;
 }
 
+interface PolymarketRow {
+  fixture_id: number | null;
+  outcomes: string[];
+  outcome_prices: number[];
+  volume: string;
+}
+
 /** Oracle V1.4: price = (published_index - 800) / 5 */
 function indexToPrice(index: number): number {
   return Math.round(((index - 800) / 5) * 100) / 100;
+}
+
+export interface BookmakerOdds {
+  home: number;
+  draw: number;
+  away: number;
+  count: number;          // number of bookmakers
+}
+
+export interface PolymarketOdds {
+  homeYes: number;        // 0-1
+  drawYes: number;        // 0-1
+  awayYes: number;        // 0-1
+  volume: number;         // USD
 }
 
 export interface UpcomingMatch {
@@ -44,6 +65,8 @@ export interface UpcomingMatch {
   bookmaker_home_prob: number | null;
   bookmaker_draw_prob: number | null;
   bookmaker_away_prob: number | null;
+  bookmaker_odds: BookmakerOdds | null;     // median decimal odds
+  polymarket: PolymarketOdds | null;        // Polymarket Yes% prices
 }
 
 // ─── Fetch helpers ───────────────────────────────────────────
@@ -93,8 +116,22 @@ async function fetchOracleState(): Promise<Map<string, { index: number; b: numbe
   return map;
 }
 
-async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, { homeProb: number; drawProb: number; awayProb: number }>> {
-  const map = new Map<number, { homeProb: number; drawProb: number; awayProb: number }>();
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+interface OddsResult {
+  homeProb: number;
+  drawProb: number;
+  awayProb: number;
+  bookmakerOdds: BookmakerOdds;
+}
+
+async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, OddsResult>> {
+  const map = new Map<number, OddsResult>();
   if (fixtureIds.length === 0) return map;
 
   // Read from latest_odds serving table — one row per (fixture, bookmaker)
@@ -125,13 +162,58 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
       const rawAway = awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length;
 
       const total = rawHome + rawDraw + rawAway;
+
+      // Median decimal odds for display
+      const medHome = Math.round(median(rows.map(r => Number(r.home_odds!))) * 100) / 100;
+      const medDraw = Math.round(median(rows.map(r => Number(r.draw_odds!))) * 100) / 100;
+      const medAway = Math.round(median(rows.map(r => Number(r.away_odds!))) * 100) / 100;
+
       map.set(fid, {
         homeProb: rawHome / total,
         drawProb: rawDraw / total,
         awayProb: rawAway / total,
+        bookmakerOdds: { home: medHome, draw: medDraw, away: medAway, count: rows.length },
       });
     }
   }
+  return map;
+}
+
+async function fetchPolymarketForFixtures(
+  fixtureIds: number[]
+): Promise<Map<number, PolymarketOdds>> {
+  const map = new Map<number, PolymarketOdds>();
+  if (fixtureIds.length === 0) return map;
+
+  // Get latest moneyline snapshot per fixture
+  for (let i = 0; i < fixtureIds.length; i += 50) {
+    const batch = fixtureIds.slice(i, i + 50);
+    const { data, error } = await supabase
+      .from("polymarket_match_odds")
+      .select("fixture_id, outcomes, outcome_prices, volume")
+      .eq("market_type", "moneyline")
+      .in("fixture_id", batch)
+      .order("snapshot_time", { ascending: false });
+
+    if (error || !data) continue;
+
+    // Take latest per fixture (ordered desc, so first wins)
+    for (const row of data as PolymarketRow[]) {
+      if (!row.fixture_id || map.has(row.fixture_id)) continue;
+      const outcomes = row.outcomes as string[];
+      const prices = row.outcome_prices as number[];
+      if (!outcomes || !prices || outcomes.length !== 3 || prices.length !== 3) continue;
+
+      // Outcomes are [Home, Draw, Away] for moneyline
+      map.set(row.fixture_id, {
+        homeYes: prices[0],
+        drawYes: prices[1],
+        awayYes: prices[2],
+        volume: Number(row.volume) || 0,
+      });
+    }
+  }
+
   return map;
 }
 
@@ -139,7 +221,8 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
 function buildUpcomingMatches(
   matches: MatchRow[],
   stateMap: Map<string, { index: number; b: number; m1: number }>,
-  oddsMap: Map<number, { homeProb: number; drawProb: number; awayProb: number }>
+  oddsMap: Map<number, OddsResult>,
+  polyMap: Map<number, PolymarketOdds>
 ): UpcomingMatch[] {
   const seen = new Set<string>();
   const deduped: MatchRow[] = [];
@@ -167,6 +250,7 @@ function buildUpcomingMatches(
     if (!home || !away) continue;
 
     const odds = oddsMap.get(m.fixture_id);
+    const poly = polyMap.get(m.fixture_id);
 
     result.push({
       fixture_id: m.fixture_id,
@@ -181,6 +265,8 @@ function buildUpcomingMatches(
       bookmaker_home_prob: odds?.homeProb ?? null,
       bookmaker_draw_prob: odds?.drawProb ?? null,
       bookmaker_away_prob: odds?.awayProb ?? null,
+      bookmaker_odds: odds?.bookmakerOdds ?? null,
+      polymarket: poly ?? null,
     });
   }
 
@@ -197,9 +283,12 @@ export default async function MatchesPage() {
   ]);
 
   const fixtureIds = rawMatches.map(m => m.fixture_id);
-  const oddsMap = await fetchOddsForFixtures(fixtureIds);
+  const [oddsMap, polyMap] = await Promise.all([
+    fetchOddsForFixtures(fixtureIds),
+    fetchPolymarketForFixtures(fixtureIds),
+  ]);
 
-  const matches = buildUpcomingMatches(rawMatches, stateMap, oddsMap);
+  const matches = buildUpcomingMatches(rawMatches, stateMap, oddsMap, polyMap);
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-6">
