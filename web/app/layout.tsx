@@ -34,6 +34,7 @@ export default function RootLayout({
                 { href: "/", label: "Rankings" },
                 { href: "/oracle", label: "Oracle" },
                 { href: "/matches", label: "Matches" },
+                { href: "/measureme", label: "MeasureMe" },
               ].map((link) => (
                 <a
                   key={link.href}
@@ -43,14 +44,11 @@ export default function RootLayout({
                   {link.label}
                 </a>
               ))}
-              {/* Old pages */}
+              {/* Legacy pages */}
               <span className="text-xs text-muted/50 font-mono">|</span>
               {[
                 { href: "/old/oracle", label: "Old Oracle" },
-                { href: "/old/matches", label: "Matches" },
-                { href: "/old/v3", label: "Simulation" },
-                { href: "/old/compare", label: "Compare" },
-                { href: "/old/measureme", label: "MeasureMe" },
+                { href: "/old/matches", label: "Old Matches" },
               ].map((link) => (
                 <a
                   key={link.href}
