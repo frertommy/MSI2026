@@ -47,64 +47,9 @@ export interface OddsRow {
   days_before_kickoff: number;
 }
 
-export interface NormalizedOdds {
-  fixture_id: number;
-  homeProb: number;
-  drawProb: number;
-  awayProb: number;
-}
-
-export interface TeamPrice {
-  team: string;
-  league: string;
-  date: string;
-  model: string;
-  implied_elo: number;
-  dollar_price: number;
-  ema_dollar_price: number | null;
-  confidence: number;
-  matches_in_window: number;
-  drift_elo: number;
-}
-
-export interface MatchProb {
-  fixture_id: number;
-  model: string;
-  date: string;
-  home_team: string;
-  away_team: string;
-  implied_home_win: number;
-  implied_draw: number;
-  implied_away_win: number;
-  bookmaker_home_win: number;
-  bookmaker_draw: number;
-  bookmaker_away_win: number;
-  edge_home: number;
-  edge_draw: number;
-  edge_away: number;
-}
-
-// ─── Drift snapshot type ─────────────────────────────────
-export interface DriftSnapshot {
-  fixture_id: number;
-  bookmaker: string;
-  home_odds: number;
-  away_odds: number;
-  draw_odds: number;
-  snapshot_time: string;
-}
-
-// ─── Live price snapshot ─────────────────────────────────
-export interface LivePrice {
-  team: string;
-  league: string;
-  timestamp: string;      // ISO datetime (sub-daily)
-  model: string;
-  implied_elo: number;
-  dollar_price: number;
-  blend_mode: string;     // "live" | "prematch" | "none"
-  fixture_id: number | null;
-}
+// ─── Legacy types (removed — pricing-engine retired) ─────
+// NormalizedOdds, TeamPrice, MatchProb, DriftSnapshot, LivePrice
+// See git history if needed.
 
 // ─── Service result types ────────────────────────────────────
 export interface PollResult {
@@ -115,11 +60,7 @@ export interface PollResult {
   unmatchedEvents: string[];
 }
 
-export interface PricingResult {
-  teamPriceRows: number;
-  matchProbRows: number;
-  topTeams: { team: string; elo: number; price: number }[];
-}
+// PricingResult removed — pricing-engine retired
 
 export interface CreditStatus {
   usedToday: number;

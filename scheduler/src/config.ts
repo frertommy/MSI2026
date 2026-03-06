@@ -49,19 +49,14 @@ export const CREDITS_DAILY_SOFT_LIMIT = 25_000;              // 1-min full marke
 export const CREDITS_PER_LEAGUE_CALL = 3;                    // h2h + totals + spreads = 3 credits
 export const CREDITS_FALLBACK_INTERVAL = 5 * 60 * 1000;     // 5 min fallback when credits low
 
-// ─── Pricing engine constants (MeasureMe-validated) ──────────
-export const INITIAL_ELO = 1500;
-export const WINDOW_DAYS = 60;
-export const PRICE_SLOPE = 5;                    // price = max(FLOOR, (elo-ZERO)/SLOPE)
-export const PRICE_ZERO = 800;                   // elo zero point for pricing
-export const PRICE_FLOOR = 10;                   // minimum dollar price
-export const SHOCK_K = 30;                       // flat K-factor for match shocks (xG amplifies)
-export const CARRY_DECAY_RATE = 0.002;           // daily decay rate toward 45d MA
-export const MA_WINDOW = 45;                     // moving average window for carry anchor
-export const LIVE_SHOCK_DISCOUNT = 0.5;           // discount factor for in-play shocks
+// ─── Legacy pricing constants (removed — see git history) ────
+// pricing-engine.ts retired in favor of Oracle V1 pipeline.
+// Old constants: INITIAL_ELO, WINDOW_DAYS, PRICE_SLOPE, PRICE_ZERO,
+// PRICE_FLOOR, SHOCK_K, CARRY_DECAY_RATE, MA_WINDOW, LIVE_SHOCK_DISCOUNT
 export const BATCH_SIZE = 500;
 
-// ─── Outright futures mapping (polled every 6h for M₂ layer) ──
+// ─── Outright futures mapping (DISABLED — all API endpoints return 404) ──
+// Table dropped. Will be replaced by Polymarket futures integration.
 export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Premier League": "soccer_epl_winner",
   "La Liga": "soccer_spain_la_liga_winner",
@@ -93,11 +88,8 @@ export const POLYMARKET_FUTURES_SLUGS: Record<string, string> = {
   "Ligue 1": "french-ligue-1-winner",
 };
 
-// ─── Understat xG integration ────────────────────────────────
-export const XG_ENABLED = true;
-export const XG_POLL_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
-export const XG_FLOOR = 0.4;                         // min shock multiplier (lucky win)
-export const XG_CEILING = 1.8;                       // max shock multiplier (dominant win)
+// ─── xG integration (removed — spec §17 rejects xG in settlement) ──
+// understat-poller.ts retired. See git history for XG_ENABLED, XG_POLL_INTERVAL, XG_FLOOR, XG_CEILING.
 
 // ─── Oracle V1 constants ─────────────────────────────────────
 export const ORACLE_V1_K = 30;         // Fixed K-factor for B-layer settlement: ΔB = 30 × (S − E_KR)
@@ -110,7 +102,5 @@ export const ORACLE_V1_LIVE_ENABLED = true;            // Live layer during matc
 export const ORACLE_V1_FEEDBACK_ENABLED = false;       // Stub — no perp mark price yet
 export const ORACLE_V1_OFFSEASON_ENABLED = false;      // Outright sport keys broken (all 404)
 
-// ─── Odds blend constants (Phase 2 — legacy) ────────────────
-// Drift signal removed — replaced by direct odds-implied Elo blend
-export const PREMATCH_WEIGHT = 0.30;   // Blend weight: (1-w)*matchElo + w*oddsImplied (MeasureMe winner)
-export const LIVE_WEIGHT = 0.75;       // Blend weight during live matches (heavier than prematch)
+// ─── Legacy odds blend weights (removed — pricing-engine retired) ──
+// See git history for PREMATCH_WEIGHT, LIVE_WEIGHT.

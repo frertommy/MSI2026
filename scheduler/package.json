@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts",
-    "measureme": "tsx src/scripts/measureme.ts"
+    "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

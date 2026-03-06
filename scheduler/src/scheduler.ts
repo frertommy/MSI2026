@@ -2,7 +2,6 @@ import {
   PRIMARY_POLL_INTERVAL,
   CREDITS_FALLBACK_INTERVAL,
   CREDITS_DAILY_SOFT_LIMIT,
-  OUTRIGHT_POLL_INTERVAL,
   DAILY_CREDIT_SAFETY,
   POLYMARKET_POLL_INTERVAL,
   ORACLE_V1_ENABLED,
@@ -10,7 +9,7 @@ import {
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
 import { getSupabase } from "./api/supabase-client.js";
-import { pollOdds, pollOutrights } from "./services/odds-poller.js";
+import { pollOdds } from "./services/odds-poller.js";
 import {
   pollPolymarketMatches,
   pollPolymarketFutures,
@@ -100,20 +99,9 @@ export class Scheduler {
         });
       }
 
-      // 2b. Outright / futures polling (every 6 hours — for M₂ layer)
-      if (Date.now() - this.lastOutrightPoll >= OUTRIGHT_POLL_INTERVAL) {
-        if (this.creditTracker.canPoll()) {
-          try {
-            await pollOutrights(this.lookup!, this.creditTracker);
-            this.lastOutrightPoll = Date.now();
-          } catch (err) {
-            log.warn(
-              "Outright poll failed",
-              err instanceof Error ? err.message : err
-            );
-          }
-        }
-      }
+      // 2b. Outright / futures polling — DISABLED
+      // outright_odds table dropped; API endpoints return 404.
+      // Will be replaced by Polymarket futures integration.
 
       // 2c. Poll Polymarket (every 10 min — free, no credits, no auth)
       if (Date.now() - this.lastPolymarketPoll >= POLYMARKET_POLL_INTERVAL) {
