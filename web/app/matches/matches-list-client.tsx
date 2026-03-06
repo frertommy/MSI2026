@@ -249,46 +249,46 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
           </div>
         </div>
 
-        {/* Market Data: Bookmaker + Polymarket odds table */}
-        {(match.bookmaker_odds || match.polymarket) && (
-          <div className="mt-3 pt-2 border-t border-border/30">
-            <table className="w-full text-[10px] font-mono">
-              <thead>
-                <tr className="text-muted">
-                  <th className="text-left font-normal pb-1">Source</th>
-                  <th className="text-center font-normal pb-1">Home</th>
-                  <th className="text-center font-normal pb-1">Draw</th>
-                  <th className="text-center font-normal pb-1">Away</th>
-                  <th className="text-right font-normal pb-1"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {match.bookmaker_odds && (
-                  <tr className="text-foreground">
-                    <td className="text-left py-0.5">
-                      <span className="text-muted">Books</span>
-                    </td>
-                    <td className="text-center py-0.5 text-accent-green">{match.bookmaker_odds.home.toFixed(2)}</td>
-                    <td className="text-center py-0.5 text-accent-amber">{match.bookmaker_odds.draw.toFixed(2)}</td>
-                    <td className="text-center py-0.5 text-accent-red">{match.bookmaker_odds.away.toFixed(2)}</td>
-                    <td className="text-right py-0.5 text-muted opacity-60">{match.bookmaker_odds.count} books</td>
+        {/* Market Data: Bookmaker + Polymarket odds */}
+        {(match.bookmaker_odds || match.polymarket) && (() => {
+          const homeName = match.home_team.split(" ").pop()!;
+          const awayName = match.away_team.split(" ").pop()!;
+          return (
+            <div className="mt-3 pt-2 border-t border-border/30">
+              <table className="w-full text-[10px] font-mono">
+                <thead>
+                  <tr className="text-muted">
+                    <th className="text-left font-normal pb-1 w-12"></th>
+                    <th className="text-center font-normal pb-1 text-accent-green">{homeName}</th>
+                    <th className="text-center font-normal pb-1 text-accent-amber">Draw</th>
+                    <th className="text-center font-normal pb-1 text-accent-red">{awayName}</th>
+                    <th className="text-right font-normal pb-1 w-16"></th>
                   </tr>
-                )}
-                {match.polymarket && (
-                  <tr className="text-foreground">
-                    <td className="text-left py-0.5">
-                      <span className="text-purple-400">Poly</span>
-                    </td>
-                    <td className="text-center py-0.5 text-accent-green">{(match.polymarket.homeYes * 100).toFixed(0)}¢</td>
-                    <td className="text-center py-0.5 text-accent-amber">{(match.polymarket.drawYes * 100).toFixed(0)}¢</td>
-                    <td className="text-center py-0.5 text-accent-red">{(match.polymarket.awayYes * 100).toFixed(0)}¢</td>
-                    <td className="text-right py-0.5 text-muted opacity-60">{formatVolume(match.polymarket.volume)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {match.bookmaker_odds && (
+                    <tr>
+                      <td className="text-left py-0.5 text-muted">Odds</td>
+                      <td className="text-center py-0.5 text-foreground">{match.bookmaker_odds.home.toFixed(2)}</td>
+                      <td className="text-center py-0.5 text-foreground">{match.bookmaker_odds.draw.toFixed(2)}</td>
+                      <td className="text-center py-0.5 text-foreground">{match.bookmaker_odds.away.toFixed(2)}</td>
+                      <td className="text-right py-0.5 text-muted opacity-50">{match.bookmaker_odds.count}b</td>
+                    </tr>
+                  )}
+                  {match.polymarket && (
+                    <tr>
+                      <td className="text-left py-0.5 text-purple-400">Poly</td>
+                      <td className="text-center py-0.5 text-foreground">{(match.polymarket.homeYes * 100).toFixed(0)}¢</td>
+                      <td className="text-center py-0.5 text-foreground">{(match.polymarket.drawYes * 100).toFixed(0)}¢</td>
+                      <td className="text-center py-0.5 text-foreground">{(match.polymarket.awayYes * 100).toFixed(0)}¢</td>
+                      <td className="text-right py-0.5 text-muted opacity-50">{formatVolume(match.polymarket.volume)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
 
         {/* Probability bar */}
         {probs && (
