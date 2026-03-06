@@ -118,7 +118,48 @@ export async function computeLiveLayer(
     return { L: 0, E_live: null, E_KR, bookmaker_count: 0, frozen: true, freeze_reason: "odds_query_error" };
   }
 
-  const allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+  let allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+
+  // ── Fallback: fixture ID mismatch (API-Football vs Odds API) ─
+  if (allSnapshots.length === 0) {
+    const { data: matchRow } = await sb
+      .from("matches")
+      .select("home_team, away_team, date")
+      .eq("fixture_id", fixtureId)
+      .single();
+
+    if (matchRow) {
+      const dayBefore = new Date(new Date(matchRow.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+      const dayAfter = new Date(new Date(matchRow.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+      const { data: altFixtures } = await sb
+        .from("matches")
+        .select("fixture_id")
+        .eq("home_team", matchRow.home_team)
+        .eq("away_team", matchRow.away_team)
+        .gte("date", dayBefore)
+        .lte("date", dayAfter)
+        .neq("fixture_id", fixtureId);
+
+      if (altFixtures && altFixtures.length > 0) {
+        for (const alt of altFixtures) {
+          const altId = alt.fixture_id as number;
+          const { data: altOdds } = await sb
+            .from("latest_odds")
+            .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+            .eq("fixture_id", altId);
+
+          if (altOdds && altOdds.length > 0) {
+            allSnapshots = altOdds as OddsSnapshotRow[];
+            log.info(
+              `Live layer fallback: fixture ${fixtureId} had 0 live odds, using alt ${altId} (${allSnapshots.length} bookmakers)`
+            );
+            break;
+          }
+        }
+      }
+    }
+  }
   const commenceMs = new Date(commenceTime).getTime();
 
   // ── Step 4+5: Filter for post-kickoff + fresh + valid odds ─

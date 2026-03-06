@@ -107,15 +107,46 @@ async function fetchPriceHistory(teams: string[]): Promise<PriceHistoryPoint[]> 
   return all;
 }
 
-async function fetchOdds(fixtureId: number): Promise<OddsData | null> {
+async function fetchOdds(fixtureId: number, match: MatchInfo): Promise<OddsData | null> {
   const { data, error } = await supabase
     .from("latest_odds")
     .select("home_odds, away_odds, draw_odds")
     .eq("fixture_id", fixtureId);
 
-  if (error || !data || data.length === 0) return null;
+  let rows = data;
 
-  const valid = data.filter(
+  // Fallback: fixture ID mismatch (API-Football vs Odds API)
+  if ((!error && (!data || data.length === 0)) && match) {
+    const dayBefore = new Date(new Date(match.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+    const dayAfter = new Date(new Date(match.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+    const { data: alts } = await supabase
+      .from("matches")
+      .select("fixture_id")
+      .eq("home_team", match.home_team)
+      .eq("away_team", match.away_team)
+      .gte("date", dayBefore)
+      .lte("date", dayAfter)
+      .neq("fixture_id", fixtureId);
+
+    if (alts && alts.length > 0) {
+      for (const alt of alts) {
+        const { data: altOdds } = await supabase
+          .from("latest_odds")
+          .select("home_odds, away_odds, draw_odds")
+          .eq("fixture_id", alt.fixture_id);
+
+        if (altOdds && altOdds.length > 0) {
+          rows = altOdds;
+          break;
+        }
+      }
+    }
+  }
+
+  if (error || !rows || rows.length === 0) return null;
+
+  const valid = rows.filter(
     (r: { home_odds: number | null; away_odds: number | null; draw_odds: number | null }) =>
       r.home_odds && r.away_odds && r.draw_odds &&
       r.home_odds > 0 && r.away_odds > 0 && r.draw_odds > 0
@@ -158,7 +189,7 @@ export default async function MatchDetailPage({
   const [stateMap, priceHistory, odds] = await Promise.all([
     fetchOracleState(teams),
     fetchPriceHistory(teams),
-    fetchOdds(fixtureId),
+    fetchOdds(fixtureId, match),
   ]);
 
   const homeState = stateMap.get(match.home_team) ?? null;

@@ -125,7 +125,7 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
   // Load match to get kickoff timestamp
   const { data: matchData, error: matchErr } = await sb
     .from("matches")
-    .select("fixture_id, date, commence_time")
+    .select("fixture_id, date, commence_time, home_team, away_team")
     .eq("fixture_id", fixtureId)
     .single();
 
@@ -166,6 +166,52 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     }
 
     allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+
+    // Fallback: fixture ID mismatch (API-Football vs Odds API)
+    if (allSnapshots.length === 0) {
+      const dayBefore = new Date(new Date(matchData.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+      const dayAfter = new Date(new Date(matchData.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+      const { data: altFixtures } = await sb
+        .from("matches")
+        .select("fixture_id")
+        .eq("home_team", matchData.home_team ?? "")
+        .eq("away_team", matchData.away_team ?? "")
+        .gte("date", dayBefore)
+        .lte("date", dayAfter)
+        .neq("fixture_id", fixtureId);
+
+      if (altFixtures && altFixtures.length > 0) {
+        for (const alt of altFixtures) {
+          const altId = alt.fixture_id as number;
+          // Try serving table for alt
+          const { data: altPreko } = await sb
+            .from("latest_preko_odds")
+            .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+            .eq("fixture_id", altId);
+
+          if (altPreko && altPreko.length > 0) {
+            allSnapshots = altPreko as OddsSnapshotRow[];
+            log.info(`freezeKR fallback: fixture ${fixtureId} had 0 odds, using alt ${altId} (${allSnapshots.length} bookmakers)`);
+            break;
+          }
+
+          // Last resort: archive for alt
+          const { data: altArchive } = await sb
+            .from("odds_snapshots")
+            .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+            .eq("fixture_id", altId)
+            .lt("snapshot_time", kickoffTs)
+            .order("snapshot_time", { ascending: false });
+
+          if (altArchive && altArchive.length > 0) {
+            allSnapshots = altArchive as OddsSnapshotRow[];
+            log.info(`freezeKR fallback (archive): fixture ${fixtureId} had 0 odds, using alt ${altId} (${allSnapshots.length} snapshots)`);
+            break;
+          }
+        }
+      }
+    }
   } else {
     allSnapshots = prekoData as OddsSnapshotRow[];
   }
