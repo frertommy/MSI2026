@@ -12,12 +12,11 @@ interface MatchRow {
   status: string;
 }
 
-interface TeamPriceRow {
-  team: string;
-  league: string;
-  date: string;
-  dollar_price: number;
-  implied_elo: number;
+interface OracleStateRow {
+  team_id: string;
+  published_index: number;
+  b_value: number;
+  m1_value: number;
 }
 
 interface OddsRow {
@@ -27,17 +26,21 @@ interface OddsRow {
   draw_odds: number | null;
 }
 
+/** Oracle V1.4: price = (published_index - 800) / 5 */
+function indexToPrice(index: number): number {
+  return Math.round(((index - 800) / 5) * 100) / 100;
+}
+
 export interface UpcomingMatch {
   fixture_id: number;
   date: string;
   league: string;
   home_team: string;
   away_team: string;
-  home_elo: number;
-  away_elo: number;
+  home_index: number;
+  away_index: number;
   home_price: number;
   away_price: number;
-  league_mean_elo: number;
   bookmaker_home_prob: number | null;
   bookmaker_draw_prob: number | null;
   bookmaker_away_prob: number | null;
@@ -67,32 +70,24 @@ async function fetchUpcomingMatches(): Promise<MatchRow[]> {
   return all;
 }
 
-async function fetchLatestOraclePrices(): Promise<Map<string, { price: number; elo: number; league: string }>> {
-  const map = new Map<string, { price: number; elo: number; league: string }>();
-
-  const { data: latest } = await supabase
-    .from("team_prices")
-    .select("date")
-    .eq("model", "oracle")
-    .order("date", { ascending: false })
-    .limit(1);
-
-  const latestDate = latest?.[0]?.date;
-  if (!latestDate) return map;
+async function fetchOracleState(): Promise<Map<string, { index: number; b: number; m1: number }>> {
+  const map = new Map<string, { index: number; b: number; m1: number }>();
 
   const { data, error } = await supabase
-    .from("team_prices")
-    .select("team, league, dollar_price, implied_elo")
-    .eq("model", "oracle")
-    .eq("date", latestDate);
+    .from("team_oracle_state")
+    .select("team_id, published_index, b_value, m1_value");
 
   if (error) {
-    console.error("team_prices fetch error:", error.message);
+    console.error("team_oracle_state fetch error:", error.message);
     return map;
   }
 
-  for (const row of data ?? []) {
-    map.set(row.team, { price: row.dollar_price, elo: row.implied_elo, league: (row as TeamPriceRow).league });
+  for (const row of (data ?? []) as OracleStateRow[]) {
+    map.set(row.team_id, {
+      index: Number(row.published_index),
+      b: Number(row.b_value),
+      m1: Number(row.m1_value),
+    });
   }
 
   return map;
@@ -143,7 +138,7 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
 // ─── Build data ──────────────────────────────────────────────
 function buildUpcomingMatches(
   matches: MatchRow[],
-  priceMap: Map<string, { price: number; elo: number; league: string }>,
+  stateMap: Map<string, { index: number; b: number; m1: number }>,
   oddsMap: Map<number, { homeProb: number; drawProb: number; awayProb: number }>
 ): UpcomingMatch[] {
   const seen = new Set<string>();
@@ -165,20 +160,10 @@ function buildUpcomingMatches(
 
   deduped.sort((a, b) => a.date.localeCompare(b.date));
 
-  const leagueElos = new Map<string, number[]>();
-  for (const { elo, league } of priceMap.values()) {
-    if (!leagueElos.has(league)) leagueElos.set(league, []);
-    leagueElos.get(league)!.push(elo);
-  }
-  const leagueMeans = new Map<string, number>();
-  for (const [league, elos] of leagueElos) {
-    leagueMeans.set(league, elos.reduce((a, b) => a + b, 0) / elos.length);
-  }
-
   const result: UpcomingMatch[] = [];
   for (const m of deduped) {
-    const home = priceMap.get(m.home_team);
-    const away = priceMap.get(m.away_team);
+    const home = stateMap.get(m.home_team);
+    const away = stateMap.get(m.away_team);
     if (!home || !away) continue;
 
     const odds = oddsMap.get(m.fixture_id);
@@ -189,11 +174,10 @@ function buildUpcomingMatches(
       league: m.league,
       home_team: m.home_team,
       away_team: m.away_team,
-      home_elo: home.elo,
-      away_elo: away.elo,
-      home_price: home.price,
-      away_price: away.price,
-      league_mean_elo: leagueMeans.get(m.league) ?? 1500,
+      home_index: home.index,
+      away_index: away.index,
+      home_price: indexToPrice(home.index),
+      away_price: indexToPrice(away.index),
       bookmaker_home_prob: odds?.homeProb ?? null,
       bookmaker_draw_prob: odds?.drawProb ?? null,
       bookmaker_away_prob: odds?.awayProb ?? null,
@@ -207,15 +191,15 @@ function buildUpcomingMatches(
 export const revalidate = 300;
 
 export default async function MatchesPage() {
-  const [rawMatches, priceMap] = await Promise.all([
+  const [rawMatches, stateMap] = await Promise.all([
     fetchUpcomingMatches(),
-    fetchLatestOraclePrices(),
+    fetchOracleState(),
   ]);
 
   const fixtureIds = rawMatches.map(m => m.fixture_id);
   const oddsMap = await fetchOddsForFixtures(fixtureIds);
 
-  const matches = buildUpcomingMatches(rawMatches, priceMap, oddsMap);
+  const matches = buildUpcomingMatches(rawMatches, stateMap, oddsMap);
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-6">

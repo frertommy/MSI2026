@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import type { TeamRow } from "@/lib/types";
 
 const LEAGUE_SHORT: Record<string, string> = {
@@ -22,15 +21,15 @@ const LEAGUE_COLOR: Record<string, string> = {
 
 function priceColor(price: number | null): string {
   if (price === null) return "text-muted";
-  if (price >= 65) return "text-accent-green";
-  if (price >= 45) return "text-accent-amber";
+  if (price >= 200) return "text-accent-green";
+  if (price >= 140) return "text-accent-amber";
   return "text-accent-red";
 }
 
-function eloColor(elo: number | null): string {
-  if (elo === null) return "text-muted";
-  if (elo >= 1600) return "text-accent-green";
-  if (elo >= 1450) return "text-accent-amber";
+function indexColor(idx: number | null): string {
+  if (idx === null) return "text-muted";
+  if (idx >= 1800) return "text-accent-green";
+  if (idx >= 1500) return "text-accent-amber";
   return "text-accent-red";
 }
 
@@ -57,7 +56,6 @@ export function TeamTable({
   leagues: string[];
   liveTeams?: Set<string>;
 }) {
-  const router = useRouter();
   const [activeLeague, setActiveLeague] = useState<string>("All");
 
   const filtered =
@@ -108,7 +106,7 @@ export function TeamTable({
               <th className="py-2 pr-3 text-right w-10">#</th>
               <th className="py-2 px-3 text-left">Team</th>
               <th className="py-2 px-3 text-left w-16">League</th>
-              <th className="py-2 px-3 text-right w-16">Elo</th>
+              <th className="py-2 px-3 text-right w-16">Index</th>
               <th className="py-2 px-3 text-right w-20">Price</th>
               <th className="py-2 px-3 text-right w-10">P</th>
               <th className="py-2 px-3 text-center w-24">W-D-L</th>
@@ -120,8 +118,7 @@ export function TeamTable({
             {ranked.map((t) => (
               <tr
                 key={t.team}
-                onClick={() => router.push(`/old/compare?team=${encodeURIComponent(t.team)}`)}
-                className="border-b border-border/50 hover:bg-surface-hover cursor-pointer transition-colors group"
+                className="border-b border-border/50 hover:bg-surface-hover transition-colors group"
               >
                 <td className="py-2 pr-3 text-right font-mono text-muted">
                   {t.rank}
@@ -145,12 +142,12 @@ export function TeamTable({
                   {LEAGUE_SHORT[t.league] || t.league}
                 </td>
                 <td
-                  className={`py-2 px-3 text-right font-mono font-bold ${eloColor(
-                    t.impliedElo
+                  className={`py-2 px-3 text-right font-mono font-bold ${indexColor(
+                    t.publishedIndex
                   )}`}
                 >
-                  {t.impliedElo !== null
-                    ? Math.round(t.impliedElo)
+                  {t.publishedIndex !== null
+                    ? Math.round(t.publishedIndex)
                     : "---"}
                 </td>
                 <td

@@ -3,11 +3,8 @@
 import { useState } from "react";
 import type { UpcomingMatch } from "./page";
 
-// ─── Constants ───────────────────────────────────────────────
-const INITIAL_ELO = 1500;
-const DOLLAR_SPREAD = 220;
-const HOME_ADVANTAGE = 70;
-const K_BASE = 20;
+// ─── Oracle V1.4 Constants ───────────────────────────────────
+const ORACLE_K = 30;
 
 const LEAGUE_SHORT: Record<string, string> = {
   "Premier League": "EPL",
@@ -33,59 +30,48 @@ const LEAGUE_BG: Record<string, string> = {
   "Ligue 1": "bg-cyan-400/10 border-cyan-400/20",
 };
 
-// ─── Price impact calculation ────────────────────────────────
-function logistic(elo: number): number {
-  return 100 / (1 + Math.exp(-(elo - INITIAL_ELO) / DOLLAR_SPREAD));
+// ─── Oracle V1.4 Price Impact ────────────────────────────────
+/** price = (published_index - 800) / 5 */
+function indexToPrice(index: number): number {
+  return Math.round(((index - 800) / 5) * 100) / 100;
 }
 
 interface OutcomeImpact {
   label: string;
-  delta: number;
+  deltaPrice: number;
   pctDelta: number;
 }
 
+/**
+ * Oracle V1.4 settlement: delta_B = K × (S - E_KR)
+ * E_KR = teamWinProb + 0.5 × drawProb
+ * S = 1.0 (win), 0.5 (draw), 0.0 (loss)
+ */
 function computeImpacts(
-  teamElo: number,
-  opponentElo: number,
+  teamIndex: number,
   teamPrice: number,
-  leagueMean: number,
-  isHome: boolean,
   teamWinProb: number,
   drawProb: number,
-  teamLossProb: number
 ): { win: OutcomeImpact; draw: OutcomeImpact; loss: OutcomeImpact } {
-  const expected = 3 * teamWinProb + 1 * drawProb + 0 * teamLossProb;
-  const effectiveK = K_BASE * (1 + (opponentElo - leagueMean) / 400);
+  const E_KR = teamWinProb + 0.5 * drawProb;
 
   const outcomes = [
-    { label: "Win", actual: 3 },
-    { label: "Draw", actual: 1 },
-    { label: "Loss", actual: 0 },
+    { label: "Win", S: 1.0 },
+    { label: "Draw", S: 0.5 },
+    { label: "Loss", S: 0.0 },
   ] as const;
 
   const results: Record<string, OutcomeImpact> = {};
   for (const o of outcomes) {
-    const surprise = o.actual - expected;
-    const newElo = teamElo + effectiveK * surprise;
-    const newPrice = logistic(newElo);
-    const delta = Math.round((newPrice - teamPrice) * 100) / 100;
-    const pctDelta = teamPrice > 0 ? Math.round((delta / teamPrice) * 10000) / 100 : 0;
-    results[o.label.toLowerCase()] = { label: o.label, delta, pctDelta };
+    const delta_B = ORACLE_K * (o.S - E_KR);
+    const newIndex = teamIndex + delta_B;
+    const newPrice = indexToPrice(newIndex);
+    const deltaPrice = Math.round((newPrice - teamPrice) * 100) / 100;
+    const pctDelta = teamPrice > 0 ? Math.round((deltaPrice / teamPrice) * 10000) / 100 : 0;
+    results[o.label.toLowerCase()] = { label: o.label, deltaPrice, pctDelta };
   }
 
   return results as { win: OutcomeImpact; draw: OutcomeImpact; loss: OutcomeImpact };
-}
-
-function computeModelProbs(homeElo: number, awayElo: number): { home: number; draw: number; away: number } {
-  const homeExpected = 1 / (1 + Math.pow(10, (awayElo - homeElo - HOME_ADVANTAGE) / 400));
-  const eloDiff = Math.abs(homeElo - awayElo);
-  const drawBase = 0.26 - (eloDiff / 3000);
-  const drawProb = Math.max(0.10, Math.min(0.32, drawBase));
-
-  const homeProb = homeExpected * (1 - drawProb);
-  const awayProb = (1 - homeExpected) * (1 - drawProb);
-
-  return { home: homeProb, draw: drawProb, away: awayProb };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -124,56 +110,41 @@ function formatDate(dateStr: string): string {
 }
 
 // ─── Components ──────────────────────────────────────────────
-function ImpactRow({ label, delta, pctDelta }: { label: string; delta: number; pctDelta: number }) {
+function ImpactRow({ label, deltaPrice, pctDelta }: { label: string; deltaPrice: number; pctDelta: number }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[11px] text-muted">{label}</span>
       <div className="flex items-center gap-1.5">
-        <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(delta)}`}>
-          {formatDelta(delta)}
+        <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(deltaPrice)}`}>
+          {formatDelta(deltaPrice)}
         </span>
-        <span className={`text-[10px] font-mono tabular-nums ${deltaColor(delta)} opacity-60`}>
+        <span className={`text-[10px] font-mono tabular-nums ${deltaColor(deltaPrice)} opacity-60`}>
           {formatPctDelta(pctDelta)}
         </span>
-        <span className={`text-[10px] ${deltaColor(delta)}`}>{deltaArrow(delta)}</span>
+        <span className={`text-[10px] ${deltaColor(deltaPrice)}`}>{deltaArrow(deltaPrice)}</span>
       </div>
     </div>
   );
 }
 
 function MatchCard({ match }: { match: UpcomingMatch }) {
-  const modelProbs = computeModelProbs(match.home_elo, match.away_elo);
+  // Oracle V1.4 requires bookmaker odds for settlement — no fallback model
+  const hasOdds = match.bookmaker_home_prob !== null;
 
-  const probs = match.bookmaker_home_prob !== null
+  const probs = hasOdds
     ? {
         home: match.bookmaker_home_prob!,
         draw: match.bookmaker_draw_prob!,
         away: match.bookmaker_away_prob!,
       }
-    : modelProbs;
+    : null;
 
-  const homeImpacts = computeImpacts(
-    match.home_elo,
-    match.away_elo,
-    match.home_price,
-    match.league_mean_elo,
-    true,
-    probs.home,
-    probs.draw,
-    probs.away
-  );
-  const awayImpacts = computeImpacts(
-    match.away_elo,
-    match.home_elo,
-    match.away_price,
-    match.league_mean_elo,
-    false,
-    probs.away,
-    probs.draw,
-    probs.home
-  );
-
-  const probSource = match.bookmaker_home_prob !== null ? "odds" : "elo";
+  const homeImpacts = probs
+    ? computeImpacts(match.home_index, match.home_price, probs.home, probs.draw)
+    : null;
+  const awayImpacts = probs
+    ? computeImpacts(match.away_index, match.away_price, probs.away, probs.draw)
+    : null;
 
   return (
     <a
@@ -202,14 +173,20 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
             <div>
               <div className="text-sm font-bold text-foreground truncate">{match.home_team}</div>
               <div className="text-[11px] text-muted font-mono">
-                ${match.home_price.toFixed(2)} · Elo {Math.round(match.home_elo)}
+                ${match.home_price.toFixed(2)} · Idx {Math.round(match.home_index)}
               </div>
             </div>
-            <div className="space-y-1 border-t border-border/30 pt-2">
-              <ImpactRow label={`${match.home_team.split(" ").pop()} Win`} delta={homeImpacts.win.delta} pctDelta={homeImpacts.win.pctDelta} />
-              <ImpactRow label="Draw" delta={homeImpacts.draw.delta} pctDelta={homeImpacts.draw.pctDelta} />
-              <ImpactRow label={`${match.home_team.split(" ").pop()} Loss`} delta={homeImpacts.loss.delta} pctDelta={homeImpacts.loss.pctDelta} />
-            </div>
+            {homeImpacts ? (
+              <div className="space-y-1 border-t border-border/30 pt-2">
+                <ImpactRow label={`${match.home_team.split(" ").pop()} Win`} deltaPrice={homeImpacts.win.deltaPrice} pctDelta={homeImpacts.win.pctDelta} />
+                <ImpactRow label="Draw" deltaPrice={homeImpacts.draw.deltaPrice} pctDelta={homeImpacts.draw.pctDelta} />
+                <ImpactRow label={`${match.home_team.split(" ").pop()} Loss`} deltaPrice={homeImpacts.loss.deltaPrice} pctDelta={homeImpacts.loss.pctDelta} />
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted border-t border-border/30 pt-2 italic">
+                Awaiting odds
+              </div>
+            )}
           </div>
 
           {/* VS divider */}
@@ -222,73 +199,81 @@ function MatchCard({ match }: { match: UpcomingMatch }) {
             <div>
               <div className="text-sm font-bold text-foreground truncate">{match.away_team}</div>
               <div className="text-[11px] text-muted font-mono">
-                ${match.away_price.toFixed(2)} · Elo {Math.round(match.away_elo)}
+                ${match.away_price.toFixed(2)} · Idx {Math.round(match.away_index)}
               </div>
             </div>
-            <div className="space-y-1 border-t border-border/30 pt-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className={`text-[10px] ${deltaColor(awayImpacts.win.delta)}`}>{deltaArrow(awayImpacts.win.delta)}</span>
-                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.win.delta)} opacity-60`}>
-                  {formatPctDelta(awayImpacts.win.pctDelta)}
-                </span>
-                <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.win.delta)}`}>
-                  {formatDelta(awayImpacts.win.delta)}
-                </span>
-                <span className="text-[11px] text-muted">{match.away_team.split(" ").pop()} Win</span>
+            {awayImpacts ? (
+              <div className="space-y-1 border-t border-border/30 pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] ${deltaColor(awayImpacts.win.deltaPrice)}`}>{deltaArrow(awayImpacts.win.deltaPrice)}</span>
+                  <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.win.deltaPrice)} opacity-60`}>
+                    {formatPctDelta(awayImpacts.win.pctDelta)}
+                  </span>
+                  <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.win.deltaPrice)}`}>
+                    {formatDelta(awayImpacts.win.deltaPrice)}
+                  </span>
+                  <span className="text-[11px] text-muted">{match.away_team.split(" ").pop()} Win</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] ${deltaColor(awayImpacts.draw.deltaPrice)}`}>{deltaArrow(awayImpacts.draw.deltaPrice)}</span>
+                  <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.draw.deltaPrice)} opacity-60`}>
+                    {formatPctDelta(awayImpacts.draw.pctDelta)}
+                  </span>
+                  <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.draw.deltaPrice)}`}>
+                    {formatDelta(awayImpacts.draw.deltaPrice)}
+                  </span>
+                  <span className="text-[11px] text-muted">Draw</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] ${deltaColor(awayImpacts.loss.deltaPrice)}`}>{deltaArrow(awayImpacts.loss.deltaPrice)}</span>
+                  <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.loss.deltaPrice)} opacity-60`}>
+                    {formatPctDelta(awayImpacts.loss.pctDelta)}
+                  </span>
+                  <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.loss.deltaPrice)}`}>
+                    {formatDelta(awayImpacts.loss.deltaPrice)}
+                  </span>
+                  <span className="text-[11px] text-muted">{match.away_team.split(" ").pop()} Loss</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className={`text-[10px] ${deltaColor(awayImpacts.draw.delta)}`}>{deltaArrow(awayImpacts.draw.delta)}</span>
-                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.draw.delta)} opacity-60`}>
-                  {formatPctDelta(awayImpacts.draw.pctDelta)}
-                </span>
-                <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.draw.delta)}`}>
-                  {formatDelta(awayImpacts.draw.delta)}
-                </span>
-                <span className="text-[11px] text-muted">Draw</span>
+            ) : (
+              <div className="text-[10px] text-muted border-t border-border/30 pt-2 italic">
+                Awaiting odds
               </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className={`text-[10px] ${deltaColor(awayImpacts.loss.delta)}`}>{deltaArrow(awayImpacts.loss.delta)}</span>
-                <span className={`text-[10px] font-mono tabular-nums ${deltaColor(awayImpacts.loss.delta)} opacity-60`}>
-                  {formatPctDelta(awayImpacts.loss.pctDelta)}
-                </span>
-                <span className={`text-xs font-mono font-bold tabular-nums ${deltaColor(awayImpacts.loss.delta)}`}>
-                  {formatDelta(awayImpacts.loss.delta)}
-                </span>
-                <span className="text-[11px] text-muted">{match.away_team.split(" ").pop()} Loss</span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
         {/* Probability bar */}
-        <div className="mt-3 pt-2 border-t border-border/30">
-          <div className="flex items-center gap-2 text-[10px] text-muted font-mono mb-1.5">
-            <span>Match Probabilities</span>
-            <span className="text-[9px] opacity-60">({probSource})</span>
+        {probs && (
+          <div className="mt-3 pt-2 border-t border-border/30">
+            <div className="flex items-center gap-2 text-[10px] text-muted font-mono mb-1.5">
+              <span>Match Probabilities</span>
+              <span className="text-[9px] opacity-60">(odds)</span>
+            </div>
+            <div className="flex h-2 w-full overflow-hidden rounded-full">
+              <div
+                className="bg-accent-green transition-all"
+                style={{ width: `${probs.home * 100}%` }}
+                title={`Home: ${formatPct(probs.home)}`}
+              />
+              <div
+                className="bg-accent-amber transition-all"
+                style={{ width: `${probs.draw * 100}%` }}
+                title={`Draw: ${formatPct(probs.draw)}`}
+              />
+              <div
+                className="bg-accent-red transition-all"
+                style={{ width: `${probs.away * 100}%` }}
+                title={`Away: ${formatPct(probs.away)}`}
+              />
+            </div>
+            <div className="flex justify-between mt-1 text-[10px] font-mono">
+              <span className="text-accent-green">{formatPct(probs.home)}</span>
+              <span className="text-accent-amber">{formatPct(probs.draw)}</span>
+              <span className="text-accent-red">{formatPct(probs.away)}</span>
+            </div>
           </div>
-          <div className="flex h-2 w-full overflow-hidden rounded-full">
-            <div
-              className="bg-accent-green transition-all"
-              style={{ width: `${probs.home * 100}%` }}
-              title={`Home: ${formatPct(probs.home)}`}
-            />
-            <div
-              className="bg-accent-amber transition-all"
-              style={{ width: `${probs.draw * 100}%` }}
-              title={`Draw: ${formatPct(probs.draw)}`}
-            />
-            <div
-              className="bg-accent-red transition-all"
-              style={{ width: `${probs.away * 100}%` }}
-              title={`Away: ${formatPct(probs.away)}`}
-            />
-          </div>
-          <div className="flex justify-between mt-1 text-[10px] font-mono">
-            <span className="text-accent-green">{formatPct(probs.home)}</span>
-            <span className="text-accent-amber">{formatPct(probs.draw)}</span>
-            <span className="text-accent-red">{formatPct(probs.away)}</span>
-          </div>
-        </div>
+        )}
       </div>
     </a>
   );

@@ -13,19 +13,16 @@ import {
 } from "recharts";
 import type {
   MatchInfo,
-  TeamPricePoint,
-  LatestPrice,
+  OracleState,
+  PriceHistoryPoint,
   OddsData,
 } from "./page";
+import { indexToPrice } from "./page";
 
 // ─── Constants ───────────────────────────────────────────────
 const HOME_COLOR = "#22c55e";
 const AWAY_COLOR = "#ef4444";
-
-const INITIAL_ELO = 1500;
-const DOLLAR_SPREAD = 220;
-const HOME_ADVANTAGE = 70;
-const K_BASE = 20;
+const ORACLE_K = 30;
 
 const LEAGUE_SHORT: Record<string, string> = {
   "Premier League": "EPL",
@@ -60,44 +57,36 @@ const tooltipStyle: React.CSSProperties = {
   padding: "8px 10px",
 };
 
-// ─── Impact helpers (same as matches list) ───────────────────
-function logistic(elo: number): number {
-  return 100 / (1 + Math.exp(-(elo - INITIAL_ELO) / DOLLAR_SPREAD));
-}
-
+// ─── Oracle V1.4 Impact ─────────────────────────────────────
 interface OutcomeImpact {
   label: string;
-  delta: number;
+  deltaPrice: number;
   pctDelta: number;
 }
 
 function computeImpacts(
-  teamElo: number,
-  opponentElo: number,
+  teamIndex: number,
   teamPrice: number,
-  leagueMean: number,
   teamWinProb: number,
-  drawProb: number,
-  teamLossProb: number
+  drawProb: number
 ): { win: OutcomeImpact; draw: OutcomeImpact; loss: OutcomeImpact } {
-  const expected = 3 * teamWinProb + 1 * drawProb + 0 * teamLossProb;
-  const effectiveK = K_BASE * (1 + (opponentElo - leagueMean) / 400);
+  const E_KR = teamWinProb + 0.5 * drawProb;
 
   const outcomes = [
-    { label: "Win", actual: 3 },
-    { label: "Draw", actual: 1 },
-    { label: "Loss", actual: 0 },
+    { label: "Win", S: 1.0 },
+    { label: "Draw", S: 0.5 },
+    { label: "Loss", S: 0.0 },
   ] as const;
 
   const results: Record<string, OutcomeImpact> = {};
   for (const o of outcomes) {
-    const surprise = o.actual - expected;
-    const newElo = teamElo + effectiveK * surprise;
-    const newPrice = logistic(newElo);
-    const delta = Math.round((newPrice - teamPrice) * 100) / 100;
+    const delta_B = ORACLE_K * (o.S - E_KR);
+    const newIndex = teamIndex + delta_B;
+    const newPrice = indexToPrice(newIndex);
+    const deltaPrice = Math.round((newPrice - teamPrice) * 100) / 100;
     const pctDelta =
-      teamPrice > 0 ? Math.round((delta / teamPrice) * 10000) / 100 : 0;
-    results[o.label.toLowerCase()] = { label: o.label, delta, pctDelta };
+      teamPrice > 0 ? Math.round((deltaPrice / teamPrice) * 10000) / 100 : 0;
+    results[o.label.toLowerCase()] = { label: o.label, deltaPrice, pctDelta };
   }
 
   return results as {
@@ -105,22 +94,6 @@ function computeImpacts(
     draw: OutcomeImpact;
     loss: OutcomeImpact;
   };
-}
-
-function computeModelProbs(
-  homeElo: number,
-  awayElo: number
-): { home: number; draw: number; away: number } {
-  const homeExpected =
-    1 / (1 + Math.pow(10, (awayElo - homeElo - HOME_ADVANTAGE) / 400));
-  const eloDiff = Math.abs(homeElo - awayElo);
-  const drawBase = 0.26 - eloDiff / 3000;
-  const drawProb = Math.max(0.1, Math.min(0.32, drawBase));
-
-  const homeProb = homeExpected * (1 - drawProb);
-  const awayProb = (1 - homeExpected) * (1 - drawProb);
-
-  return { home: homeProb, draw: drawProb, away: awayProb };
 }
 
 function deltaColor(delta: number): string {
@@ -145,7 +118,7 @@ function formatPctDelta(pct: number): string {
 
 // ─── Chart types ─────────────────────────────────────────────
 interface ChartRow {
-  date: string;
+  ts: string;
   dateLabel: string;
   homePrice: number | null;
   awayPrice: number | null;
@@ -154,37 +127,44 @@ interface ChartRow {
 // ─── Props ───────────────────────────────────────────────────
 interface Props {
   match: MatchInfo;
-  priceHistory: TeamPricePoint[];
-  latestPrices: Record<string, LatestPrice>;
-  leagueMean: number;
+  homeState: OracleState | null;
+  awayState: OracleState | null;
+  priceHistory: PriceHistoryPoint[];
   odds: OddsData | null;
 }
 
 // ─── Component ───────────────────────────────────────────────
 export function MatchDetailClient({
   match,
+  homeState,
+  awayState,
   priceHistory,
-  latestPrices,
-  leagueMean,
   odds,
 }: Props) {
-  const homeLatest = latestPrices[match.home_team];
-  const awayLatest = latestPrices[match.away_team];
+  const homeIndex = homeState ? Number(homeState.published_index) : 1500;
+  const awayIndex = awayState ? Number(awayState.published_index) : 1500;
+  const homePrice = indexToPrice(homeIndex);
+  const awayPrice = indexToPrice(awayIndex);
 
-  // Build chart data: merge both teams onto shared date axis
+  // Build chart data from oracle_price_history
   const chartData = useMemo((): ChartRow[] => {
-    const dateMap = new Map<
+    // Group by hour for cleaner chart
+    const bucketMap = new Map<
       string,
       { homePrice: number | null; awayPrice: number | null }
     >();
 
     for (const pt of priceHistory) {
-      const d = pt.date.slice(0, 10);
-      if (!dateMap.has(d))
-        dateMap.set(d, { homePrice: null, awayPrice: null });
-      const entry = dateMap.get(d)!;
-      if (pt.team === match.home_team) entry.homePrice = pt.dollar_price;
-      if (pt.team === match.away_team) entry.awayPrice = pt.dollar_price;
+      // Bucket by hour
+      const d = new Date(pt.timestamp);
+      const bucket = `${d.toISOString().slice(0, 13)}:00`;
+
+      if (!bucketMap.has(bucket))
+        bucketMap.set(bucket, { homePrice: null, awayPrice: null });
+      const entry = bucketMap.get(bucket)!;
+      const price = indexToPrice(pt.published_index);
+      if (pt.team === match.home_team) entry.homePrice = price;
+      if (pt.team === match.away_team) entry.awayPrice = price;
     }
 
     const months = [
@@ -192,13 +172,13 @@ export function MatchDetailClient({
       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
 
-    return [...dateMap.entries()]
+    return [...bucketMap.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, vals]) => {
-        const d = new Date(date + "T00:00:00Z");
+      .map(([ts, vals]) => {
+        const d = new Date(ts);
         return {
-          date,
-          dateLabel: `${months[d.getUTCMonth()]} ${d.getUTCDate()}`,
+          ts,
+          dateLabel: `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCHours().toString().padStart(2, "0")}:00`,
           homePrice: vals.homePrice,
           awayPrice: vals.awayPrice,
         };
@@ -222,49 +202,22 @@ export function MatchDetailClient({
     return Math.round((last - first) * 100) / 100;
   }, [chartData]);
 
-  // Match date for reference line
   const hasResult = match.score != null && match.score !== "";
-  const matchDateStr = match.date.slice(0, 10);
 
-  // Probabilities
-  const homeElo = homeLatest?.implied_elo ?? 1500;
-  const awayElo = awayLatest?.implied_elo ?? 1500;
-  const modelProbs = computeModelProbs(homeElo, awayElo);
+  // Impacts (only if we have odds)
+  const homeImpacts = odds
+    ? computeImpacts(homeIndex, homePrice, odds.homeProb, odds.drawProb)
+    : null;
+  const awayImpacts = odds
+    ? computeImpacts(awayIndex, awayPrice, odds.awayProb, odds.drawProb)
+    : null;
 
-  // Normalize to { home, draw, away } shape
-  const probs = odds
-    ? { home: odds.homeProb, draw: odds.drawProb, away: odds.awayProb }
-    : modelProbs;
-
-  const homePrice = homeLatest?.dollar_price ?? 0;
-  const awayPrice = awayLatest?.dollar_price ?? 0;
-
-  // Impacts
-  const homeImpacts = computeImpacts(
-    homeElo,
-    awayElo,
-    homePrice,
-    leagueMean,
-    probs.home,
-    probs.draw,
-    probs.away
-  );
-  const awayImpacts = computeImpacts(
-    awayElo,
-    homeElo,
-    awayPrice,
-    leagueMean,
-    probs.away,
-    probs.draw,
-    probs.home
-  );
-
-  // Y-axis domain: compute nice bounds
+  // Y-axis domain
   const allPrices = chartData.flatMap((d) =>
     [d.homePrice, d.awayPrice].filter((p): p is number => p != null)
   );
   const yMin = allPrices.length > 0 ? Math.floor(Math.min(...allPrices) - 2) : 0;
-  const yMax = allPrices.length > 0 ? Math.ceil(Math.max(...allPrices) + 2) : 100;
+  const yMax = allPrices.length > 0 ? Math.ceil(Math.max(...allPrices) + 2) : 250;
 
   return (
     <div className="space-y-6">
@@ -309,7 +262,7 @@ export function MatchDetailClient({
               <span className="text-foreground font-bold">
                 ${homePrice.toFixed(2)}
               </span>
-              <span>Elo {Math.round(homeElo)}</span>
+              <span>Idx {Math.round(homeIndex)}</span>
               {homeDelta3d != null && (
                 <span
                   className={
@@ -360,7 +313,7 @@ export function MatchDetailClient({
                   {awayDelta3d.toFixed(2)} 3d
                 </span>
               )}
-              <span>Elo {Math.round(awayElo)}</span>
+              <span>Idx {Math.round(awayIndex)}</span>
               <span className="text-foreground font-bold">
                 ${awayPrice.toFixed(2)}
               </span>
@@ -373,7 +326,7 @@ export function MatchDetailClient({
       <div className="border border-border rounded-lg bg-surface p-4">
         <div className="flex items-center gap-3 mb-4">
           <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">
-            Price History
+            Index History
           </h2>
           <span className="text-[10px] text-muted font-mono">Last 3 days</span>
           <div className="flex items-center gap-4 ml-auto text-xs font-mono text-muted">
@@ -426,7 +379,7 @@ export function MatchDetailClient({
                   axisLine={false}
                   tickLine={false}
                   width={60}
-                  tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+                  tickFormatter={(v: number) => `$${v.toFixed(0)}`}
                 />
                 <Tooltip
                   content={({ active, payload }) => {
@@ -446,62 +399,30 @@ export function MatchDetailClient({
                         {row.homePrice != null && (
                           <div style={{ color: HOME_COLOR, marginBottom: 2 }}>
                             {match.home_team}: ${row.homePrice.toFixed(2)}
-                            {homeDelta3d != null &&
-                              chartData.length > 0 &&
-                              chartData[0].homePrice != null && (
-                                <span style={{ opacity: 0.6, marginLeft: 6 }}>
-                                  {row.homePrice - chartData[0].homePrice >= 0
-                                    ? "+"
-                                    : ""}
-                                  $
-                                  {(
-                                    row.homePrice - chartData[0].homePrice
-                                  ).toFixed(2)}
-                                </span>
-                              )}
                           </div>
                         )}
                         {row.awayPrice != null && (
                           <div style={{ color: AWAY_COLOR }}>
                             {match.away_team}: ${row.awayPrice.toFixed(2)}
-                            {awayDelta3d != null &&
-                              chartData.length > 0 &&
-                              chartData[0].awayPrice != null && (
-                                <span style={{ opacity: 0.6, marginLeft: 6 }}>
-                                  {row.awayPrice - chartData[0].awayPrice >= 0
-                                    ? "+"
-                                    : ""}
-                                  $
-                                  {(
-                                    row.awayPrice - chartData[0].awayPrice
-                                  ).toFixed(2)}
-                                </span>
-                              )}
                           </div>
                         )}
                       </div>
                     );
                   }}
                 />
-                {/* Match result reference line */}
-                {hasResult &&
-                  chartData.some((d) => d.date === matchDateStr) && (
-                    <ReferenceLine
-                      x={
-                        chartData.find((d) => d.date === matchDateStr)
-                          ?.dateLabel
-                      }
-                      stroke="#666"
-                      strokeDasharray="4 4"
-                      label={{
-                        value: `FT ${match.score}`,
-                        position: "top",
-                        fill: "#c8c8c8",
-                        fontSize: 10,
-                        fontFamily: "monospace",
-                      }}
-                    />
-                  )}
+                {hasResult && (
+                  <ReferenceLine
+                    y={0}
+                    stroke="transparent"
+                    label={{
+                      value: `FT ${match.score}`,
+                      position: "top",
+                      fill: "#c8c8c8",
+                      fontSize: 10,
+                      fontFamily: "monospace",
+                    }}
+                  />
+                )}
                 <Line
                   type="monotone"
                   dataKey="homePrice"
@@ -525,7 +446,7 @@ export function MatchDetailClient({
           </div>
         ) : (
           <div className="text-center text-muted text-sm py-12 font-mono">
-            No price data available for the last 3 days
+            No price history available for the last 3 days
           </div>
         )}
       </div>
@@ -536,104 +457,109 @@ export function MatchDetailClient({
           Outcome Impact
         </h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Home team impacts */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: HOME_COLOR }}
-              />
-              <span className="text-xs font-bold text-foreground uppercase tracking-wider">
-                {match.home_team}
-              </span>
-              <span className="text-[10px] text-muted font-mono ml-auto">
-                ${homePrice.toFixed(2)} · Elo {Math.round(homeElo)}
-              </span>
-            </div>
-            {(["win", "draw", "loss"] as const).map((outcome) => {
-              const impact = homeImpacts[outcome];
-              return (
+        {homeImpacts && awayImpacts ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Home team impacts */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 mb-2">
                 <div
-                  key={outcome}
-                  className="flex items-center justify-between gap-2 py-1"
-                >
-                  <span className="text-[11px] text-muted">{impact.label}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`text-xs font-mono font-bold tabular-nums ${deltaColor(
-                        impact.delta
-                      )}`}
-                    >
-                      {formatDelta(impact.delta)}
-                    </span>
-                    <span
-                      className={`text-[10px] font-mono tabular-nums ${deltaColor(
-                        impact.delta
-                      )} opacity-60`}
-                    >
-                      {formatPctDelta(impact.pctDelta)}
-                    </span>
-                    <span className={`text-[10px] ${deltaColor(impact.delta)}`}>
-                      {deltaArrow(impact.delta)}
-                    </span>
+                  className="w-2.5 h-2.5 rounded-full"
+                  style={{ backgroundColor: HOME_COLOR }}
+                />
+                <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                  {match.home_team}
+                </span>
+                <span className="text-[10px] text-muted font-mono ml-auto">
+                  ${homePrice.toFixed(2)} · Idx {Math.round(homeIndex)}
+                </span>
+              </div>
+              {(["win", "draw", "loss"] as const).map((outcome) => {
+                const impact = homeImpacts[outcome];
+                return (
+                  <div
+                    key={outcome}
+                    className="flex items-center justify-between gap-2 py-1"
+                  >
+                    <span className="text-[11px] text-muted">{impact.label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-xs font-mono font-bold tabular-nums ${deltaColor(
+                          impact.deltaPrice
+                        )}`}
+                      >
+                        {formatDelta(impact.deltaPrice)}
+                      </span>
+                      <span
+                        className={`text-[10px] font-mono tabular-nums ${deltaColor(
+                          impact.deltaPrice
+                        )} opacity-60`}
+                      >
+                        {formatPctDelta(impact.pctDelta)}
+                      </span>
+                      <span className={`text-[10px] ${deltaColor(impact.deltaPrice)}`}>
+                        {deltaArrow(impact.deltaPrice)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
 
-          {/* Away team impacts */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: AWAY_COLOR }}
-              />
-              <span className="text-xs font-bold text-foreground uppercase tracking-wider">
-                {match.away_team}
-              </span>
-              <span className="text-[10px] text-muted font-mono ml-auto">
-                ${awayPrice.toFixed(2)} · Elo {Math.round(awayElo)}
-              </span>
-            </div>
-            {(["win", "draw", "loss"] as const).map((outcome) => {
-              const impact = awayImpacts[outcome];
-              return (
+            {/* Away team impacts */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 mb-2">
                 <div
-                  key={outcome}
-                  className="flex items-center justify-between gap-2 py-1"
-                >
-                  <span className="text-[11px] text-muted">{impact.label}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`text-xs font-mono font-bold tabular-nums ${deltaColor(
-                        impact.delta
-                      )}`}
-                    >
-                      {formatDelta(impact.delta)}
-                    </span>
-                    <span
-                      className={`text-[10px] font-mono tabular-nums ${deltaColor(
-                        impact.delta
-                      )} opacity-60`}
-                    >
-                      {formatPctDelta(impact.pctDelta)}
-                    </span>
-                    <span className={`text-[10px] ${deltaColor(impact.delta)}`}>
-                      {deltaArrow(impact.delta)}
-                    </span>
+                  className="w-2.5 h-2.5 rounded-full"
+                  style={{ backgroundColor: AWAY_COLOR }}
+                />
+                <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                  {match.away_team}
+                </span>
+                <span className="text-[10px] text-muted font-mono ml-auto">
+                  ${awayPrice.toFixed(2)} · Idx {Math.round(awayIndex)}
+                </span>
+              </div>
+              {(["win", "draw", "loss"] as const).map((outcome) => {
+                const impact = awayImpacts[outcome];
+                return (
+                  <div
+                    key={outcome}
+                    className="flex items-center justify-between gap-2 py-1"
+                  >
+                    <span className="text-[11px] text-muted">{impact.label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-xs font-mono font-bold tabular-nums ${deltaColor(
+                          impact.deltaPrice
+                        )}`}
+                      >
+                        {formatDelta(impact.deltaPrice)}
+                      </span>
+                      <span
+                        className={`text-[10px] font-mono tabular-nums ${deltaColor(
+                          impact.deltaPrice
+                        )} opacity-60`}
+                      >
+                        {formatPctDelta(impact.pctDelta)}
+                      </span>
+                      <span className={`text-[10px] ${deltaColor(impact.deltaPrice)}`}>
+                        {deltaArrow(impact.deltaPrice)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="text-center text-muted text-sm py-8 font-mono">
+            Awaiting bookmaker odds for impact calculation
+          </div>
+        )}
 
         {/* Formula note */}
         <div className="mt-4 pt-3 border-t border-border/30 text-[10px] text-muted font-mono">
-          Price impact = logistic(Elo ± K<sub>eff</sub> × surprise) where K
-          <sub>eff</sub> = 20 × (1 + (opp_elo − league_mean) / 400)
+          Oracle V1.4: delta_B = K &times; (S &minus; E_KR) where K=30, E_KR = P(win) + 0.5&times;P(draw), price = (index &minus; 800) / 5
         </div>
       </div>
     </div>

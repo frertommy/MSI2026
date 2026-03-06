@@ -13,24 +13,31 @@ export interface MatchInfo {
   status: string;
 }
 
-export interface TeamPricePoint {
-  team: string;
-  date: string;
-  dollar_price: number;
-  implied_elo: number;
+export interface OracleState {
+  team_id: string;
+  published_index: number;
+  b_value: number;
+  m1_value: number;
 }
 
-export interface LatestPrice {
+export interface PriceHistoryPoint {
   team: string;
-  league: string;
-  dollar_price: number;
-  implied_elo: number;
+  timestamp: string;
+  published_index: number;
+  b_value: number;
+  m1_value: number;
+  publish_reason: string;
 }
 
 export interface OddsData {
   homeProb: number;
   drawProb: number;
   awayProb: number;
+}
+
+/** Oracle V1.4: price = (published_index - 800) / 5 */
+export function indexToPrice(index: number): number {
+  return Math.round(((index - 800) / 5) * 100) / 100;
 }
 
 // ─── Fetch helpers ───────────────────────────────────────────
@@ -46,88 +53,61 @@ async function fetchMatch(fixtureId: number): Promise<MatchInfo | null> {
   return data as MatchInfo;
 }
 
-async function fetchPriceHistory(teams: string[]): Promise<TeamPricePoint[]> {
-  // Get last 3 days of oracle prices for both teams
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 3);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+async function fetchOracleState(teams: string[]): Promise<Map<string, OracleState>> {
+  const map = new Map<string, OracleState>();
 
-  const all: TeamPricePoint[] = [];
-  for (const team of teams) {
-    const { data, error } = await supabase
-      .from("team_prices")
-      .select("team, date, dollar_price, implied_elo")
-      .eq("model", "oracle")
-      .eq("team", team)
-      .gte("date", cutoffStr)
-      .order("date", { ascending: true });
+  const { data, error } = await supabase
+    .from("team_oracle_state")
+    .select("team_id, published_index, b_value, m1_value")
+    .in("team_id", teams);
 
-    if (error) {
-      console.error("price history fetch error:", error.message);
-      continue;
-    }
-    if (data) all.push(...(data as TeamPricePoint[]));
-  }
-  return all;
-}
+  if (error || !data) return map;
 
-async function fetchLatestOraclePrices(teams: string[]): Promise<Map<string, LatestPrice>> {
-  const map = new Map<string, LatestPrice>();
-
-  const { data: latest } = await supabase
-    .from("team_prices")
-    .select("date")
-    .eq("model", "oracle")
-    .order("date", { ascending: false })
-    .limit(1);
-
-  const latestDate = latest?.[0]?.date;
-  if (!latestDate) return map;
-
-  for (const team of teams) {
-    const { data } = await supabase
-      .from("team_prices")
-      .select("team, league, dollar_price, implied_elo")
-      .eq("model", "oracle")
-      .eq("team", team)
-      .eq("date", latestDate)
-      .limit(1);
-
-    if (data && data.length > 0) {
-      const row = data[0] as LatestPrice;
-      map.set(row.team, row);
-    }
+  for (const row of data as OracleState[]) {
+    map.set(row.team_id, {
+      ...row,
+      published_index: Number(row.published_index),
+      b_value: Number(row.b_value),
+      m1_value: Number(row.m1_value),
+    });
   }
 
   return map;
 }
 
-async function fetchLeagueMeanElo(league: string): Promise<number> {
-  const { data: latest } = await supabase
-    .from("team_prices")
-    .select("date")
-    .eq("model", "oracle")
-    .order("date", { ascending: false })
-    .limit(1);
+async function fetchPriceHistory(teams: string[]): Promise<PriceHistoryPoint[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffStr = cutoff.toISOString();
 
-  const latestDate = latest?.[0]?.date;
-  if (!latestDate) return 1500;
+  const all: PriceHistoryPoint[] = [];
+  for (const team of teams) {
+    const { data, error } = await supabase
+      .from("oracle_price_history")
+      .select("team, timestamp, published_index, b_value, m1_value, publish_reason")
+      .eq("team", team)
+      .gte("timestamp", cutoffStr)
+      .order("timestamp", { ascending: true });
 
-  const { data } = await supabase
-    .from("team_prices")
-    .select("implied_elo")
-    .eq("model", "oracle")
-    .eq("date", latestDate)
-    .eq("league", league);
-
-  if (!data || data.length === 0) return 1500;
-
-  const elos = data.map((r: { implied_elo: number }) => r.implied_elo);
-  return elos.reduce((a: number, b: number) => a + b, 0) / elos.length;
+    if (error) {
+      console.error("price history fetch error:", error.message);
+      continue;
+    }
+    if (data) {
+      all.push(
+        ...(data as PriceHistoryPoint[]).map((r) => ({
+          ...r,
+          published_index: Number(r.published_index),
+          b_value: Number(r.b_value),
+          m1_value: Number(r.m1_value),
+        }))
+      );
+    }
+  }
+  return all;
 }
 
 async function fetchOdds(fixtureId: number): Promise<OddsData | null> {
-  // Read from latest_odds serving table — one row per bookmaker
   const { data, error } = await supabase
     .from("latest_odds")
     .select("home_odds, away_odds, draw_odds")
@@ -175,20 +155,22 @@ export default async function MatchDetailPage({
 
   const teams = [match.home_team, match.away_team];
 
-  const [priceHistory, latestPrices, leagueMean, odds] = await Promise.all([
+  const [stateMap, priceHistory, odds] = await Promise.all([
+    fetchOracleState(teams),
     fetchPriceHistory(teams),
-    fetchLatestOraclePrices(teams),
-    fetchLeagueMeanElo(match.league),
     fetchOdds(fixtureId),
   ]);
+
+  const homeState = stateMap.get(match.home_team) ?? null;
+  const awayState = stateMap.get(match.away_team) ?? null;
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-6">
       <MatchDetailClient
         match={match}
+        homeState={homeState}
+        awayState={awayState}
         priceHistory={priceHistory}
-        latestPrices={Object.fromEntries(latestPrices)}
-        leagueMean={leagueMean}
         odds={odds}
       />
     </main>

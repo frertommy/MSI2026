@@ -3,34 +3,40 @@ import { TeamTable } from "./team-table";
 import { CreditBar } from "./credit-bar";
 import type { Match, TeamRow } from "@/lib/types";
 
-// Fetch latest oracle dollar_price + implied_elo per team from team_prices
-async function fetchLatestPrices(): Promise<Map<string, { price: number; elo: number }>> {
-  const map = new Map<string, { price: number; elo: number }>();
+/** Oracle V1.4: price = (published_index - 800) / 5 */
+function indexToPrice(index: number): number {
+  return Math.round(((index - 800) / 5) * 100) / 100;
+}
 
-  // Get the most recent oracle date (1 row), then fetch that date only (~96 rows)
-  const { data: latest } = await supabase
-    .from("team_prices")
-    .select("date")
-    .eq("model", "oracle")
-    .order("date", { ascending: false })
-    .limit(1);
-
-  const latestDate = latest?.[0]?.date;
-  if (!latestDate) return map;
+// Fetch current oracle state from team_oracle_state (the live V1.4 table)
+async function fetchOracleState(): Promise<Map<string, { index: number; league: string }>> {
+  const map = new Map<string, { index: number; league: string }>();
 
   const { data, error } = await supabase
-    .from("team_prices")
-    .select("team, dollar_price, implied_elo")
-    .eq("model", "oracle")
-    .eq("date", latestDate);
+    .from("team_oracle_state")
+    .select("team_id, published_index");
 
   if (error) {
-    console.error("team_prices fetch error:", error.message);
+    console.error("team_oracle_state fetch error:", error.message);
     return map;
   }
 
+  // Get league from oracle_price_history (most recent per team)
+  const { data: leagueData } = await supabase
+    .from("oracle_price_history")
+    .select("team, league")
+    .order("timestamp", { ascending: false });
+
+  const leagueMap = new Map<string, string>();
+  for (const row of leagueData ?? []) {
+    if (!leagueMap.has(row.team)) leagueMap.set(row.team, row.league);
+  }
+
   for (const row of data ?? []) {
-    map.set(row.team, { price: row.dollar_price, elo: row.implied_elo });
+    map.set(row.team_id, {
+      index: Number(row.published_index),
+      league: leagueMap.get(row.team_id) ?? "",
+    });
   }
 
   return map;
@@ -69,7 +75,7 @@ function parseScore(score: string): [number, number] | null {
 
 function computeTeamRows(
   matches: Match[],
-  priceMap: Map<string, { price: number; elo: number }>
+  stateMap: Map<string, { index: number; league: string }>
 ): TeamRow[] {
   const teamStats = new Map<
     string,
@@ -121,23 +127,24 @@ function computeTeamRows(
 
   const rows: TeamRow[] = [];
   for (const [team, stats] of teamStats) {
-    const teamData = priceMap.get(team);
+    const state = stateMap.get(team);
+    const idx = state?.index ?? null;
     rows.push({
       rank: 0,
       team,
-      league: stats.league,
+      league: state?.league || stats.league,
       played: stats.played,
       wins: stats.wins,
       draws: stats.draws,
       losses: stats.losses,
       latestDate: stats.latestDate,
-      dollarPrice: teamData?.price ?? null,
-      impliedElo: teamData?.elo ?? null,
+      dollarPrice: idx !== null ? indexToPrice(idx) : null,
+      publishedIndex: idx,
     });
   }
 
-  // Sort by implied Elo descending
-  rows.sort((a, b) => (b.impliedElo ?? 0) - (a.impliedElo ?? 0));
+  // Sort by published index descending
+  rows.sort((a, b) => (b.publishedIndex ?? 0) - (a.publishedIndex ?? 0));
   rows.forEach((r, i) => (r.rank = i + 1));
 
   return rows;
@@ -146,9 +153,9 @@ function computeTeamRows(
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [matches, priceMap] = await Promise.all([
+  const [matches, stateMap] = await Promise.all([
     fetchAllMatches(),
-    fetchLatestPrices(),
+    fetchOracleState(),
   ]);
 
   // Identify teams with live matches
@@ -160,7 +167,7 @@ export default async function Home() {
     }
   }
 
-  const teams = computeTeamRows(matches, priceMap);
+  const teams = computeTeamRows(matches, stateMap);
   const leagues = [...new Set(teams.map((t) => t.league))].sort();
 
   return (
@@ -175,18 +182,6 @@ export default async function Home() {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <a
-              href="/old/measureme"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              MeasureMe &rarr;
-            </a>
-            <a
-              href="/old/v3"
-              className="text-xs text-accent-green hover:text-foreground transition-colors font-mono uppercase tracking-wider"
-            >
-              Simulation &rarr;
-            </a>
             <span className="text-xs text-muted font-mono">
               {teams.length} teams &middot; {matches.length} matches
             </span>
