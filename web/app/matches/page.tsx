@@ -238,8 +238,16 @@ async function fetchOddsForFixtures(
   return map;
 }
 
+function parsePolyRow(row: PolymarketRow): PolymarketOdds | null {
+  const outcomes = row.outcomes as string[];
+  const prices = row.outcome_prices as number[];
+  if (!outcomes || !prices || outcomes.length !== 3 || prices.length !== 3) return null;
+  return { homeYes: prices[0], drawYes: prices[1], awayYes: prices[2], volume: Number(row.volume) || 0 };
+}
+
 async function fetchPolymarketForFixtures(
-  fixtureIds: number[]
+  fixtureIds: number[],
+  matches: MatchRow[]
 ): Promise<Map<number, PolymarketOdds>> {
   const map = new Map<number, PolymarketOdds>();
   if (fixtureIds.length === 0) return map;
@@ -259,17 +267,46 @@ async function fetchPolymarketForFixtures(
     // Take latest per fixture (ordered desc, so first wins)
     for (const row of data as PolymarketRow[]) {
       if (!row.fixture_id || map.has(row.fixture_id)) continue;
-      const outcomes = row.outcomes as string[];
-      const prices = row.outcome_prices as number[];
-      if (!outcomes || !prices || outcomes.length !== 3 || prices.length !== 3) continue;
+      const parsed = parsePolyRow(row);
+      if (parsed) map.set(row.fixture_id, parsed);
+    }
+  }
 
-      // Outcomes are [Home, Draw, Away] for moneyline
-      map.set(row.fixture_id, {
-        homeYes: prices[0],
-        drawYes: prices[1],
-        awayYes: prices[2],
-        volume: Number(row.volume) || 0,
-      });
+  // Fallback: fixture ID mismatch (Polymarket linked to Odds API ID, web uses API-Football ID)
+  const missingFixtures = matches.filter(m => !map.has(m.fixture_id));
+  if (missingFixtures.length > 0) {
+    for (const m of missingFixtures) {
+      const dayBefore = new Date(new Date(m.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+      const dayAfter = new Date(new Date(m.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+      const { data: alts } = await supabase
+        .from("matches")
+        .select("fixture_id")
+        .eq("home_team", m.home_team)
+        .eq("away_team", m.away_team)
+        .gte("date", dayBefore)
+        .lte("date", dayAfter)
+        .neq("fixture_id", m.fixture_id);
+
+      if (!alts || alts.length === 0) continue;
+
+      for (const alt of alts) {
+        const { data: polyData } = await supabase
+          .from("polymarket_match_odds")
+          .select("fixture_id, outcomes, outcome_prices, volume")
+          .eq("market_type", "moneyline")
+          .eq("fixture_id", alt.fixture_id)
+          .order("snapshot_time", { ascending: false })
+          .limit(1);
+
+        if (polyData && polyData.length > 0) {
+          const parsed = parsePolyRow(polyData[0] as PolymarketRow);
+          if (parsed) {
+            map.set(m.fixture_id, parsed);
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -344,7 +381,7 @@ export default async function MatchesPage() {
   const fixtureIds = rawMatches.map(m => m.fixture_id);
   const [oddsMap, polyMap] = await Promise.all([
     fetchOddsForFixtures(fixtureIds, rawMatches),
-    fetchPolymarketForFixtures(fixtureIds),
+    fetchPolymarketForFixtures(fixtureIds, rawMatches),
   ]);
 
   const matches = buildUpcomingMatches(rawMatches, stateMap, oddsMap, polyMap);

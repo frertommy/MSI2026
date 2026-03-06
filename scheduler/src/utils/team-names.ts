@@ -46,10 +46,17 @@ function stripAccents(s: string): string {
 function normalize(name: string): string {
   return stripAccents(name)
     .toLowerCase()
+    // Strip common club prefixes/suffixes
     .replace(
-      /\b(fc|cf|afc|sc|ssc|ac|as|us|rc|rcd|ca|sv|vfb|tsg|1\.\s*fc|bsc|ud|cd|fk|bv|if|sk|nk)\b/g,
+      /\b(fc|cf|afc|sc|ssc|ss|ac|as|us|rc|rcd|ca|sv|vfb|tsg|1\.\s*fc|1\.\s*fsv|bsc|ud|cd|fk|bv|if|sk|nk|ogc|osc|aj|cfc)\b/g,
       ""
     )
+    // Strip "de/di" prepositions
+    .replace(/\b(de|di)\b/g, "")
+    // Strip "Calcio" from Italian names
+    .replace(/\bcalcio\b/g, "")
+    // Strip year numbers (4-digit years like 1846, 1913 and 2-digit like 04, 09)
+    .replace(/\b(1[89]\d{2}|0\d)\b/g, "")
     .replace(/[''`.-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -23,13 +23,19 @@ function sleep(ms: number): Promise<void> {
 // Polymarket uses "Arsenal FC", "Brighton & Hove Albion FC", "AFC Bournemouth", etc.
 function cleanPolymarketName(raw: string): string {
   let name = raw.trim();
-  name = name.replace(/\s+FC$/i, "");
-  name = name.replace(/\s+AFC$/i, "");
+  // Strip year suffixes FIRST (before FC strip): 1846, 1899, 1901, 1907, 1909, 1910, 1913
+  name = name.replace(/\s+\d{4}$/g, "");
+  // Strip trailing suffixes: FC, AFC, SCO, CF, CFC, Calcio
+  name = name.replace(/\s+(?:FC|AFC|SCO|CF|CFC)$/i, "");
+  // Strip leading prefixes: AFC (not FC — "FC St. Pauli", "FC Barcelona" need alias handling)
   name = name.replace(/^AFC\s+/i, "");
-  name = name.replace(/\s+SCO$/i, "");
+  // Normalize ampersand
   name = name.replace(/&/g, "and");
-  name = name.replace(/\s+04\s+/, " ");
-  name = name.replace(/\s+de\s+Madrid$/i, "");
+  // Strip "de/di" prepositions in the middle of names (Celta de Vigo → Celta Vigo)
+  name = name.replace(/\s+de\s+/gi, " ");
+  name = name.replace(/\s+di\s+/gi, " ");
+  // Strip "Calcio" from Italian names
+  name = name.replace(/\s+Calcio$/i, "");
   return name.trim();
 }
 
