@@ -127,8 +127,9 @@ async function fetchLeagueMeanElo(league: string): Promise<number> {
 }
 
 async function fetchOdds(fixtureId: number): Promise<OddsData | null> {
+  // Read from latest_odds serving table — one row per bookmaker
   const { data, error } = await supabase
-    .from("odds_snapshots")
+    .from("latest_odds")
     .select("home_odds, away_odds, draw_odds")
     .eq("fixture_id", fixtureId);
 

@@ -106,13 +106,12 @@ export async function computeLiveLayer(
 
   const commenceTime = matchData.commence_time ?? `${matchData.date}T00:00:00Z`;
 
-  // ── Step 3: Query post-kickoff odds (live odds) ─────────
+  // ── Step 3: Query live odds from latest_odds serving table ─
+  // latest_odds has one row per (fixture, bookmaker) — already deduplicated
   const { data: oddsData, error: oddsErr } = await sb
-    .from("odds_snapshots")
+    .from("latest_odds")
     .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
-    .eq("fixture_id", fixtureId)
-    .gt("snapshot_time", commenceTime)
-    .order("snapshot_time", { ascending: false });
+    .eq("fixture_id", fixtureId);
 
   if (oddsErr) {
     log.error(`Live layer: odds query failed for fixture ${fixtureId}: ${oddsErr.message}`);
@@ -120,31 +119,27 @@ export async function computeLiveLayer(
   }
 
   const allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+  const commenceMs = new Date(commenceTime).getTime();
 
-  // ── Step 4: Latest snapshot per bookmaker ───────────────
-  const latestByBook = new Map<string, OddsSnapshotRow>();
-  for (const snap of allSnapshots) {
-    if (latestByBook.has(snap.bookmaker)) continue;
-    if (snap.home_odds == null || snap.draw_odds == null || snap.away_odds == null) continue;
-    if (snap.home_odds < 1.01 || snap.draw_odds < 1.01 || snap.away_odds < 1.01) continue;
-    latestByBook.set(snap.bookmaker, snap);
-  }
-
-  // ── Step 5: Staleness check ─────────────────────────────
+  // ── Step 4+5: Filter for post-kickoff + fresh + valid odds ─
   const nowMs = Date.now();
   const freshBooks = new Map<string, OddsSnapshotRow>();
-  for (const [book, snap] of latestByBook) {
+  for (const snap of allSnapshots) {
+    if (snap.home_odds == null || snap.draw_odds == null || snap.away_odds == null) continue;
+    if (snap.home_odds < 1.01 || snap.draw_odds < 1.01 || snap.away_odds < 1.01) continue;
     const snapMs = new Date(snap.snapshot_time).getTime();
-    if (nowMs - snapMs <= STALE_THRESHOLD_MS) {
-      freshBooks.set(book, snap);
-    }
+    // Must be post-kickoff (in-play odds, not pre-match)
+    if (snapMs <= commenceMs) continue;
+    // Must be fresh (within staleness threshold)
+    if (nowMs - snapMs > STALE_THRESHOLD_MS) continue;
+    freshBooks.set(snap.bookmaker, snap);
   }
 
   // ── Step 6: Insufficient books → freeze ─────────────────
   if (freshBooks.size < 2) {
     log.warn(
       `Live layer: fixture ${fixtureId} team=${teamId} — ` +
-      `only ${freshBooks.size} non-stale book(s) (${latestByBook.size} total), L=0`
+      `only ${freshBooks.size} non-stale book(s) (${allSnapshots.length} total), L=0`
     );
     return {
       L: 0,

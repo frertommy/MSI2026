@@ -136,22 +136,43 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
 
   const kickoffTs = matchData.commence_time ?? `${matchData.date}T23:59:59Z`;
 
-  // Query all pre-kickoff odds, most recent first
-  const { data: oddsData, error: oddsErr } = await sb
-    .from("odds_snapshots")
+  // Primary: read from latest_preko_odds serving table (one row per bookmaker, pre-KO only)
+  const { data: prekoData, error: prekoErr } = await sb
+    .from("latest_preko_odds")
     .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
-    .eq("fixture_id", fixtureId)
-    .lt("snapshot_time", kickoffTs)
-    .order("snapshot_time", { ascending: false });
+    .eq("fixture_id", fixtureId);
 
-  if (oddsErr) {
-    log.error(`freezeKR: odds query failed for fixture ${fixtureId}: ${oddsErr.message}`);
-    return null;
+  let allSnapshots: OddsSnapshotRow[];
+
+  if (prekoErr || !prekoData || prekoData.length === 0) {
+    // Fallback: archive query with DISTINCT ON logic (one per bookmaker, newest first)
+    // This is scoped to a single fixture_id so it's fast even on large tables
+    if (prekoErr) {
+      log.warn(`freezeKR: latest_preko_odds query failed, falling back to archive: ${prekoErr.message}`);
+    } else {
+      log.warn(`freezeKR: fixture ${fixtureId} — no rows in latest_preko_odds, falling back to archive`);
+    }
+
+    const { data: oddsData, error: oddsErr } = await sb
+      .from("odds_snapshots")
+      .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+      .eq("fixture_id", fixtureId)
+      .lt("snapshot_time", kickoffTs)
+      .order("snapshot_time", { ascending: false });
+
+    if (oddsErr) {
+      log.error(`freezeKR: archive odds query failed for fixture ${fixtureId}: ${oddsErr.message}`);
+      return null;
+    }
+
+    allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+  } else {
+    allSnapshots = prekoData as OddsSnapshotRow[];
   }
 
-  const allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
-
   // Latest valid snapshot per bookmaker
+  // For latest_preko_odds: already one-per-bookmaker, but still validate quality
+  // For archive fallback: dedup to one-per-bookmaker (results ordered by snapshot_time DESC)
   const latestByBook = new Map<string, OddsSnapshotRow>();
   for (const snap of allSnapshots) {
     if (latestByBook.has(snap.bookmaker)) continue;

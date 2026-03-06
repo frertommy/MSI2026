@@ -102,10 +102,11 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
   const map = new Map<number, { homeProb: number; drawProb: number; awayProb: number }>();
   if (fixtureIds.length === 0) return map;
 
+  // Read from latest_odds serving table — one row per (fixture, bookmaker)
   for (let i = 0; i < fixtureIds.length; i += 50) {
     const batch = fixtureIds.slice(i, i + 50);
     const { data, error } = await supabase
-      .from("odds_snapshots")
+      .from("latest_odds")
       .select("fixture_id, home_odds, away_odds, draw_odds")
       .in("fixture_id", batch);
 

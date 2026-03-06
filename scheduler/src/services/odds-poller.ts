@@ -184,6 +184,9 @@ export async function pollOdds(
   const allSpreadsRows: Record<string, unknown>[] = [];
   let createdFixtures = 0;
 
+  // Map fixture_id → kickoff Date for pre-KO filtering (used by latest_preko_odds)
+  const fixtureKickoffMap = new Map<number, Date>();
+
   for (const { league, events } of allEvents) {
     log.info(`  ${league}: ${events.length} events`);
     eventsFound += events.length;
@@ -230,6 +233,11 @@ export async function pollOdds(
         }
       }
 
+      // Track kickoff time for pre-KO filtering (latest_preko_odds)
+      if (event.commence_time) {
+        fixtureKickoffMap.set(fixtureId, new Date(event.commence_time));
+      }
+
       const { h2hRows, totalsRows, spreadsRows } = eventToSnapshotRows(
         event,
         fixtureId
@@ -240,7 +248,7 @@ export async function pollOdds(
     }
   }
 
-  // Upsert h2h odds rows
+  // Upsert h2h odds rows to archive
   let oddsRowsUpserted = 0;
   if (allH2hRows.length > 0) {
     const { inserted, failed } = await upsertBatched(
@@ -251,6 +259,54 @@ export async function pollOdds(
     oddsRowsUpserted = inserted;
     if (failed > 0) {
       log.warn(`${failed} h2h odds rows failed to upsert`);
+    }
+
+    // ── Upsert serving tables (latest_odds + latest_preko_odds) ──
+    // latest_odds: always upsert (globally latest per fixture+bookmaker)
+    const latestOddsRows = allH2hRows.map((r) => ({
+      fixture_id: r.fixture_id,
+      bookmaker: r.bookmaker,
+      home_odds: r.home_odds,
+      draw_odds: r.draw_odds,
+      away_odds: r.away_odds,
+      snapshot_time: r.snapshot_time,
+      source: r.source,
+    }));
+
+    const { failed: latestFailed } = await upsertBatched(
+      "latest_odds",
+      latestOddsRows,
+      "fixture_id,bookmaker"
+    );
+    if (latestFailed > 0) {
+      log.warn(`${latestFailed} latest_odds rows failed to upsert`);
+    }
+
+    // latest_preko_odds: only upsert rows where snapshot_time < kickoff_time
+    // Build a kickoff map from the events we just processed
+    const prekoRows = allH2hRows.filter((r) => {
+      const kickoff = fixtureKickoffMap.get(r.fixture_id as number);
+      if (!kickoff) return false; // no kickoff known → skip
+      return new Date(r.snapshot_time as string).getTime() < kickoff.getTime();
+    }).map((r) => ({
+      fixture_id: r.fixture_id,
+      bookmaker: r.bookmaker,
+      home_odds: r.home_odds,
+      draw_odds: r.draw_odds,
+      away_odds: r.away_odds,
+      snapshot_time: r.snapshot_time,
+      source: r.source,
+    }));
+
+    if (prekoRows.length > 0) {
+      const { failed: prekoFailed } = await upsertBatched(
+        "latest_preko_odds",
+        prekoRows,
+        "fixture_id,bookmaker"
+      );
+      if (prekoFailed > 0) {
+        log.warn(`${prekoFailed} latest_preko_odds rows failed to upsert`);
+      }
     }
   }
 

@@ -209,30 +209,24 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   const kickoffTs = nextFixture.commence_time ?? `${nextFixture.date}T23:59:59Z`;
 
   // ── Step 3: Load prematch odds consensus ─────────────────
-  const { data: oddsData, error: oddsErr } = await sb
-    .from("odds_snapshots")
+  // Primary: read from latest_preko_odds (tiny serving table, one row per bookmaker)
+  const { data: prekoData, error: prekoErr } = await sb
+    .from("latest_preko_odds")
     .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
-    .eq("fixture_id", nextFixture.fixture_id)
-    .lt("snapshot_time", kickoffTs)
-    .order("snapshot_time", { ascending: false });
+    .eq("fixture_id", nextFixture.fixture_id);
 
-  if (oddsErr) {
-    log.error(`M1 refresh: odds query failed for fixture ${nextFixture.fixture_id}: ${oddsErr.message}`);
+  if (prekoErr) {
+    log.error(`M1 refresh: latest_preko_odds query failed for fixture ${nextFixture.fixture_id}: ${prekoErr.message}`);
     return { updated: false, skipped_reason: "odds_query_error" };
   }
 
-  let allSnapshots = (oddsData ?? []) as OddsSnapshotRow[];
+  let allSnapshots = (prekoData ?? []) as OddsSnapshotRow[];
 
   // ── Fallback: fixture ID mismatch between API-Football and Odds API ──
-  // API-Football and The Odds API assign different fixture IDs for the same match
-  // (especially non-EPL leagues). If no odds under the primary ID, search broadly:
-  //   1. Exact team name match (different fixture ID, same match)
-  //   2. League + date range fuzzy match (catches cross-API naming differences like
-  //      "SSC Napoli" vs "Napoli", "Athletic Bilbao" vs "Athletic Club")
+  // These fallback queries stay on odds_snapshots (cold path, rare, scoped to single fixture)
   if (allSnapshots.length === 0) {
-    const matchDate = nextFixture.date; // YYYY-MM-DD
-    // ±3 days because API-Football and Odds API sometimes disagree on match dates
-    // (e.g. Napoli vs Torino: API-Football says Mar 6, Odds API says Mar 8)
+    // First try latest_preko_odds with alt fixture IDs, then fall back to archive
+    const matchDate = nextFixture.date;
     const dayBefore = new Date(new Date(matchDate).getTime() - 3 * 86400000).toISOString().slice(0, 10);
     const dayAfter = new Date(new Date(matchDate).getTime() + 3 * 86400000).toISOString().slice(0, 10);
 
@@ -251,6 +245,23 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     if (altFixtures && altFixtures.length > 0) {
       for (const alt of altFixtures) {
         const altId = alt.fixture_id as number;
+        // Try serving table first for alt fixture
+        const { data: altPreko } = await sb
+          .from("latest_preko_odds")
+          .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+          .eq("fixture_id", altId);
+
+        if (altPreko && altPreko.length > 0) {
+          allSnapshots = altPreko as OddsSnapshotRow[];
+          log.info(
+            `M1 fixture fallback (exact/preko): ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
+            `using alt ${altId} (${allSnapshots.length} bookmakers)`
+          );
+          foundAlt = true;
+          break;
+        }
+
+        // Last resort: archive scan for this single alt fixture
         const { data: altOdds } = await sb
           .from("odds_snapshots")
           .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
@@ -261,7 +272,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
         if (altOdds && altOdds.length > 0) {
           allSnapshots = altOdds as OddsSnapshotRow[];
           log.info(
-            `M1 fixture fallback (exact): ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
+            `M1 fixture fallback (exact/archive): ${team} — primary ${nextFixture.fixture_id} had 0 odds, ` +
             `using alt ${altId} (${allSnapshots.length} snapshots)`
           );
           foundAlt = true;
@@ -271,7 +282,6 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
     }
 
     // Strategy B: League + date range, fuzzy team name match
-    // Catches cross-API naming differences (e.g. "Napoli" vs "SSC Napoli")
     if (!foundAlt && nextFixture.league) {
       const { data: leagueFixtures } = await sb
         .from("matches")
@@ -289,12 +299,28 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
           const lfHomeNorm = fuzzyNorm(lf.home_team as string);
           const lfAwayNorm = fuzzyNorm(lf.away_team as string);
 
-          // Check if both teams fuzzy-match (home↔home, away↔away)
           const homeMatch = lfHomeNorm.includes(homeNorm) || homeNorm.includes(lfHomeNorm);
           const awayMatch = lfAwayNorm.includes(awayNorm) || awayNorm.includes(lfAwayNorm);
 
           if (homeMatch && awayMatch) {
             const altId = lf.fixture_id as number;
+            // Try serving table first
+            const { data: altPreko } = await sb
+              .from("latest_preko_odds")
+              .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+              .eq("fixture_id", altId);
+
+            if (altPreko && altPreko.length > 0) {
+              allSnapshots = altPreko as OddsSnapshotRow[];
+              log.info(
+                `M1 fixture fallback (fuzzy/preko): ${team} — primary ${nextFixture.fixture_id} ` +
+                `(${nextFixture.home_team} vs ${nextFixture.away_team}) had 0 odds, ` +
+                `using alt ${altId} (${lf.home_team} vs ${lf.away_team}, ${allSnapshots.length} bookmakers)`
+              );
+              break;
+            }
+
+            // Last resort: archive
             const { data: altOdds } = await sb
               .from("odds_snapshots")
               .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
@@ -305,7 +331,7 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
             if (altOdds && altOdds.length > 0) {
               allSnapshots = altOdds as OddsSnapshotRow[];
               log.info(
-                `M1 fixture fallback (fuzzy): ${team} — primary ${nextFixture.fixture_id} ` +
+                `M1 fixture fallback (fuzzy/archive): ${team} — primary ${nextFixture.fixture_id} ` +
                 `(${nextFixture.home_team} vs ${nextFixture.away_team}) had 0 odds, ` +
                 `using alt ${altId} (${lf.home_team} vs ${lf.away_team}, ${allSnapshots.length} snapshots)`
               );
@@ -318,6 +344,8 @@ export async function refreshM1(team: string): Promise<RefreshM1Result> {
   }
 
   // Latest valid snapshot per bookmaker
+  // For latest_preko_odds rows: already one-per-bookmaker, but validate odds quality
+  // For archive fallback rows: dedup to one-per-bookmaker (ordered by snapshot_time DESC)
   const latestByBook = new Map<string, OddsSnapshotRow>();
   for (const snap of allSnapshots) {
     if (latestByBook.has(snap.bookmaker)) continue; // already have a newer one
