@@ -120,12 +120,12 @@ export class Scheduler {
         }
       }
 
-      // 3. Refresh match scores (every 5th cycle ≈ 5 min at 1-min polling)
-      if (this.cycleCount % 5 === 0) {
-        await refreshMatches();
-        // Rebuild lookup after new matches
-        this.lookup = await buildTeamLookup();
-      }
+      // 3. Refresh match scores (every cycle — 1 min)
+      // Needed for timely status='finished' detection so settlement + L reset aren't delayed.
+      // Pro plan: 7,500 calls/day, this uses ~7,200 (5 leagues × 1,440 cycles).
+      await refreshMatches();
+      // Rebuild lookup after new matches
+      this.lookup = await buildTeamLookup();
 
       this.creditTracker.logStatus();
 
@@ -183,11 +183,11 @@ export class Scheduler {
     const footballRow = {
       provider: "api_football",
       credits_remaining: null,
-      credits_used_today: this.cycleCount % 5 === 0 ? 5 : 0, // 5 leagues every 5th cycle
-      daily_budget: 100,
-      last_poll_at: this.cycleCount % 5 === 0 ? now : undefined,
-      poll_interval_seconds: intervalSec * 5, // runs every 5th cycle
-      next_poll_at: new Date(Date.now() + this.lastInterval * 5).toISOString(),
+      credits_used_today: 5, // 5 leagues every cycle now
+      daily_budget: 7500,
+      last_poll_at: now,
+      poll_interval_seconds: intervalSec,
+      next_poll_at: new Date(Date.now() + this.lastInterval).toISOString(),
     };
 
     try {

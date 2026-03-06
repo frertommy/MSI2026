@@ -214,10 +214,15 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
   }
 
   // ── Step 2: Identify frozen teams (mid-match) ─────────────
+  // Deterministic live detection: commenced < now, not yet finished/cancelled.
+  // 4-hour window covers 90 min + extra time + halftime + any API-Football lag.
+  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
   const { data: liveMatches, error: liveErr } = await sb
     .from("matches")
     .select("fixture_id, home_team, away_team")
-    .eq("status", "live");
+    .lt("commence_time", new Date().toISOString())
+    .gt("commence_time", fourHoursAgo)
+    .not("status", "in", '("finished","cancelled")');
 
   const frozenTeams = new Set<string>();
   if (liveErr) {
