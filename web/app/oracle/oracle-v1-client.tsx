@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceDot,
+  ReferenceLine,
 } from "recharts";
 import type { TeamOracleRow, SettlementRow, MatchRow, PriceHistoryRow } from "./page";
 
@@ -191,6 +192,14 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
   const [sortAsc, setSortAsc] = useState(false);
   const [yAxisMode, setYAxisMode] = useState<YAxisMode>("price");
   const [timeframe, setTimeframe] = useState<Timeframe>("SEASON");
+  const [showPastMatches, setShowPastMatches] = useState(false);
+  const [pastMatchSelected, setPastMatchSelected] = useState<MatchRow | null>(null);
+  const [pastMatchData, setPastMatchData] = useState<{
+    home: PriceHistoryRow[];
+    away: PriceHistoryRow[];
+  } | null>(null);
+  const [pastMatchLoading, setPastMatchLoading] = useState(false);
+  const [modalYAxisMode, setModalYAxisMode] = useState<YAxisMode>("price");
 
   // ── On-demand price history (lazy-loaded per team) ────────
   const [priceHistoryCache, setPriceHistoryCache] = useState<Map<string, PriceHistoryRow[]>>(new Map());
@@ -224,6 +233,55 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
       fetchPriceHistory(selectedTeam);
     }
   }, [selectedTeam, fetchPriceHistory]);
+
+  // ── Past matches (finished, last 7 days) ─────────────────
+  const pastMatches = useMemo(() => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const cutoff = sevenDaysAgo.toISOString().slice(0, 10);
+
+    return matches
+      .filter((m) => m.status === "finished" && m.date >= cutoff)
+      .sort((a, b) => b.date.localeCompare(a.date)); // newest first
+  }, [matches]);
+
+  const pastMatchesByDate = useMemo(() => {
+    const groups = new Map<string, MatchRow[]>();
+    for (const m of pastMatches) {
+      const d = m.date.slice(0, 10);
+      if (!groups.has(d)) groups.set(d, []);
+      groups.get(d)!.push(m);
+    }
+    return groups;
+  }, [pastMatches]);
+
+  const fetchMatchPriceHistory = useCallback(async (match: MatchRow) => {
+    setPastMatchSelected(match);
+    setPastMatchData(null);
+    setPastMatchLoading(true);
+    setModalYAxisMode("price");
+    try {
+      const res = await fetch(
+        `/api/match-price-history?fixture_id=${match.fixture_id}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPastMatchData({ home: data.home, away: data.away });
+      }
+    } finally {
+      setPastMatchLoading(false);
+    }
+  }, []);
+
+  // Close modal on Escape
+  useEffect(() => {
+    if (!pastMatchSelected) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPastMatchSelected(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [pastMatchSelected]);
 
   // ── Derived lookups ────────────────────────────────────────
 
@@ -516,9 +574,10 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
             onClick={() => {
               setActiveLeague(l);
               setSelectedTeam(null);
+              setShowPastMatches(false);
             }}
             className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded border transition-all font-mono ${
-              activeLeague === l
+              activeLeague === l && !showPastMatches
                 ? "bg-foreground text-background border-foreground"
                 : "bg-transparent text-muted border-border hover:border-muted hover:text-foreground"
             }`}
@@ -526,6 +585,24 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
             {l} ({leagueCounts[l] ?? 0})
           </button>
         ))}
+
+        {/* Separator */}
+        <div className="w-px bg-border self-stretch" />
+
+        {/* Past Matches toggle */}
+        <button
+          onClick={() => {
+            setShowPastMatches(!showPastMatches);
+            setSelectedTeam(null);
+          }}
+          className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded border transition-all font-mono ${
+            showPastMatches
+              ? "bg-amber-500 text-background border-amber-500"
+              : "bg-transparent text-amber-400 border-amber-500/40 hover:border-amber-400 hover:text-amber-300"
+          }`}
+        >
+          Past Matches ({pastMatches.length})
+        </button>
       </div>
 
       {/* Loading state for price history */}
@@ -797,8 +874,187 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
         </div>
       )}
 
+      {/* ═══ Past Matches View ═══ */}
+      {showPastMatches && (
+        <div className="space-y-4">
+          {pastMatches.length === 0 ? (
+            <div className="text-center text-muted text-sm py-12 border border-border rounded font-mono">
+              No finished matches in the last 7 days.
+            </div>
+          ) : (
+            Array.from(pastMatchesByDate.entries()).map(([dateStr, dayMatches]) => (
+              <div key={dateStr}>
+                <div className="text-xs font-mono text-muted uppercase tracking-wider mb-2">
+                  {new Date(dateStr + "T00:00:00Z").toLocaleDateString("en-US", {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {dayMatches.map((m) => (
+                    <button
+                      key={m.fixture_id}
+                      onClick={() => fetchMatchPriceHistory(m)}
+                      className="border border-border rounded-lg p-3 bg-surface hover:bg-surface-hover transition-colors text-left group"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span
+                          className="w-2 h-2 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: LEAGUE_DOT_COLOR[m.league] ?? "#888",
+                          }}
+                        />
+                        <span className="text-[10px] font-mono text-muted uppercase">
+                          {LEAGUE_SHORT[m.league] ?? m.league}
+                        </span>
+                        {m.commence_time && (
+                          <span className="text-[10px] font-mono text-muted ml-auto">
+                            {new Date(m.commence_time).toLocaleTimeString("en-US", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              hour12: false,
+                            })}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between text-sm font-mono">
+                        <span className="text-foreground font-semibold truncate flex-1">
+                          {m.home_team}
+                        </span>
+                        <span className="text-amber-400 font-bold px-2 flex-shrink-0">
+                          {m.score !== "N/A" ? m.score : "—"}
+                        </span>
+                        <span className="text-foreground font-semibold truncate flex-1 text-right">
+                          {m.away_team}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ═══ Past Match Modal ═══ */}
+      {pastMatchSelected && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPastMatchSelected(null);
+          }}
+        >
+          <div className="bg-background border border-border rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            {/* Modal header */}
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-3">
+                <span
+                  className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                  style={{
+                    backgroundColor:
+                      LEAGUE_DOT_COLOR[pastMatchSelected.league] ?? "#888",
+                  }}
+                />
+                <div className="font-mono text-sm">
+                  <span className="text-foreground font-bold">
+                    {pastMatchSelected.home_team}
+                  </span>
+                  <span className="text-amber-400 font-bold mx-2">
+                    {pastMatchSelected.score !== "N/A"
+                      ? pastMatchSelected.score
+                      : "—"}
+                  </span>
+                  <span className="text-foreground font-bold">
+                    {pastMatchSelected.away_team}
+                  </span>
+                </div>
+                <span className="text-xs text-muted font-mono">
+                  {pastMatchSelected.date.slice(0, 10)}
+                </span>
+              </div>
+              <button
+                onClick={() => setPastMatchSelected(null)}
+                className="text-muted hover:text-foreground text-lg px-2 transition-colors"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <div className="p-4">
+              {pastMatchLoading && (
+                <div className="flex items-center justify-center py-16">
+                  <span className="text-xs text-muted font-mono animate-pulse">
+                    Loading price history...
+                  </span>
+                </div>
+              )}
+
+              {!pastMatchLoading && pastMatchData && (
+                <>
+                  {/* Toggle + Legend row */}
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    {/* Y-axis mode toggle */}
+                    <div className="flex rounded border border-border overflow-hidden">
+                      {(["price", "index"] as YAxisMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setModalYAxisMode(mode)}
+                          className={`px-3 py-1 text-xs font-bold font-mono uppercase tracking-wider transition-all ${
+                            modalYAxisMode === mode
+                              ? "bg-foreground text-background"
+                              : "bg-transparent text-muted hover:text-foreground"
+                          }`}
+                        >
+                          {mode === "price" ? "$PRICE" : "INDEX"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Legend */}
+                    <div className="flex gap-4 ml-auto text-xs font-mono text-muted">
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-0.5 inline-block rounded"
+                          style={{ backgroundColor: "#00e676" }}
+                        />
+                        {pastMatchSelected.home_team}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-0.5 inline-block rounded"
+                          style={{ backgroundColor: "#ff1744" }}
+                        />
+                        {pastMatchSelected.away_team}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Dual-line chart */}
+                  <MatchPriceChart
+                    match={pastMatchSelected}
+                    homeData={pastMatchData.home}
+                    awayData={pastMatchData.away}
+                    yAxisMode={modalYAxisMode}
+                  />
+
+                  {pastMatchData.home.length === 0 &&
+                    pastMatchData.away.length === 0 && (
+                      <div className="text-center text-muted text-xs font-mono py-8">
+                        No price history available for this match window.
+                      </div>
+                    )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Team table */}
-      <div className="border border-border rounded-lg overflow-hidden">
+      {!showPastMatches && <div className="border border-border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-xs font-mono">
             <thead>
@@ -974,13 +1230,176 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
 
-      {filteredRows.length === 0 && (
+      {!showPastMatches && filteredRows.length === 0 && (
         <div className="text-center text-muted text-sm py-12 border border-border rounded font-mono">
           No teams found for this filter.
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Match Price Chart (dual-line) ──────────────────────────
+
+interface MatchChartPoint {
+  ts: number; // epoch ms
+  home?: number;
+  away?: number;
+}
+
+function MatchPriceChart({
+  match,
+  homeData,
+  awayData,
+  yAxisMode,
+}: {
+  match: MatchRow;
+  homeData: PriceHistoryRow[];
+  awayData: PriceHistoryRow[];
+  yAxisMode: YAxisMode;
+}) {
+  const chartData = useMemo(() => {
+    // Merge home and away into a single timeline
+    const pointMap = new Map<number, MatchChartPoint>();
+
+    for (const row of homeData) {
+      const ts = new Date(row.timestamp).getTime();
+      const existing = pointMap.get(ts) ?? { ts };
+      existing.home = Number(row.published_index);
+      pointMap.set(ts, existing);
+    }
+
+    for (const row of awayData) {
+      const ts = new Date(row.timestamp).getTime();
+      const existing = pointMap.get(ts) ?? { ts };
+      existing.away = Number(row.published_index);
+      pointMap.set(ts, existing);
+    }
+
+    return Array.from(pointMap.values()).sort((a, b) => a.ts - b.ts);
+  }, [homeData, awayData]);
+
+  const kickoffTs = useMemo(() => {
+    const ko = match.commence_time ?? `${match.date}T12:00:00Z`;
+    return new Date(ko).getTime();
+  }, [match]);
+
+  if (chartData.length === 0) return null;
+
+  return (
+    <div style={{ width: "100%", height: 320 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart
+          data={chartData}
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+        >
+          <XAxis
+            dataKey="ts"
+            type="number"
+            scale="time"
+            domain={["dataMin", "dataMax"]}
+            tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
+            axisLine={{ stroke: "#333" }}
+            tickLine={false}
+            tickFormatter={(v: number) => {
+              const d = new Date(v);
+              const months = [
+                "Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec",
+              ];
+              const hrs = d.getUTCHours().toString().padStart(2, "0");
+              const mins = d.getUTCMinutes().toString().padStart(2, "0");
+              return `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${hrs}:${mins}`;
+            }}
+          />
+          <YAxis
+            domain={["auto", "auto"]}
+            tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
+            axisLine={false}
+            tickLine={false}
+            width={yAxisMode === "price" ? 60 : 50}
+            tickFormatter={(v: number) =>
+              yAxisMode === "price"
+                ? `$${indexToPrice(v).toFixed(2)}`
+                : v.toFixed(1)
+            }
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            content={({ active, payload }) => {
+              if (!active || !payload || payload.length === 0) return null;
+              const pt = payload[0].payload as MatchChartPoint;
+              const d = new Date(pt.ts);
+              const timeStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+              return (
+                <div style={tooltipStyle} className="p-2">
+                  <div className="text-foreground font-bold text-[10px] mb-1">
+                    {timeStr}
+                  </div>
+                  {pt.home != null && (
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-0.5 inline-block rounded"
+                        style={{ backgroundColor: "#00e676" }}
+                      />
+                      <span className="text-muted">{match.home_team}:</span>
+                      <span className="text-foreground font-bold">
+                        {yAxisMode === "price"
+                          ? `$${indexToPrice(pt.home).toFixed(2)}`
+                          : pt.home.toFixed(1)}
+                      </span>
+                    </div>
+                  )}
+                  {pt.away != null && (
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-0.5 inline-block rounded"
+                        style={{ backgroundColor: "#ff1744" }}
+                      />
+                      <span className="text-muted">{match.away_team}:</span>
+                      <span className="text-foreground font-bold">
+                        {yAxisMode === "price"
+                          ? `$${indexToPrice(pt.away).toFixed(2)}`
+                          : pt.away.toFixed(1)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            }}
+          />
+          <ReferenceLine
+            x={kickoffTs}
+            stroke="#666"
+            strokeDasharray="4 4"
+            label={{
+              value: "KO",
+              position: "top",
+              fill: "#888",
+              fontSize: 10,
+              fontFamily: "monospace",
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="home"
+            stroke="#00e676"
+            dot={false}
+            strokeWidth={1.5}
+            connectNulls
+          />
+          <Line
+            type="monotone"
+            dataKey="away"
+            stroke="#ff1744"
+            dot={false}
+            strokeWidth={1.5}
+            connectNulls
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
