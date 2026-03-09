@@ -87,6 +87,11 @@ export async function runWatchdog(
     // ── Check 5: M1 staleness ────────────────────────────────
     const m1Alerts = await checkM1Staleness();
     alerts.push(...m1Alerts);
+
+    // ── Check 6: Phantom duplicate fixtures ─────────────────
+    const phantomAlerts = await checkPhantomDuplicates();
+    alerts.push(...phantomAlerts);
+    fixesApplied += phantomAlerts.filter((a) => a.auto_fixed).length;
   } catch (err) {
     alerts.push({
       check: "watchdog_internal",
@@ -119,7 +124,7 @@ export async function runWatchdog(
   }
 
   const result: WatchdogResult = {
-    checks_run: 5,
+    checks_run: 6,
     alerts,
     fixes_applied: fixesApplied,
     health_status,
@@ -416,6 +421,86 @@ async function checkM1Staleness(): Promise<WatchdogAlert[]> {
   }
 
   return [];
+}
+
+// ─── Check 6: Phantom duplicate fixtures ─────────────────────
+
+/**
+ * Detect Odds API phantom fixtures (fixture_id > 9M) that duplicate
+ * a real API-Football fixture for the same matchup. Auto-fix by
+ * marking them as cancelled.
+ *
+ * These phantoms appear because Odds API and API-Football use different
+ * fixture IDs, and the odds-poller creates matches entries for Odds API
+ * events that haven't been matched to an API-Football fixture yet.
+ */
+async function checkPhantomDuplicates(): Promise<WatchdogAlert[]> {
+  const sb = getSupabase();
+
+  // Find upcoming phantom fixtures (Odds API IDs are > 9M)
+  const { data: phantoms, error: phErr } = await sb
+    .from("matches")
+    .select("fixture_id, home_team, away_team, date")
+    .eq("status", "upcoming")
+    .gt("fixture_id", 9000000);
+
+  if (phErr || !phantoms || phantoms.length === 0) return [];
+
+  // For each phantom, check if a real fixture exists for the same matchup
+  const duplicates: { phantom_id: number; real_id: number; teams: string }[] = [];
+
+  for (const p of phantoms) {
+    const { data: realMatch } = await sb
+      .from("matches")
+      .select("fixture_id")
+      .eq("home_team", p.home_team)
+      .eq("away_team", p.away_team)
+      .lt("fixture_id", 9000000)
+      .neq("status", "cancelled")
+      .gte("date", new Date(new Date(p.date).getTime() - 3 * 86400000).toISOString().slice(0, 10))
+      .lte("date", new Date(new Date(p.date).getTime() + 3 * 86400000).toISOString().slice(0, 10))
+      .limit(1)
+      .maybeSingle();
+
+    if (realMatch) {
+      duplicates.push({
+        phantom_id: p.fixture_id,
+        real_id: realMatch.fixture_id,
+        teams: `${p.home_team} vs ${p.away_team}`,
+      });
+    }
+  }
+
+  if (duplicates.length === 0) return [];
+
+  // Auto-fix: cancel the phantom duplicates
+  const phantomIds = duplicates.map((d) => d.phantom_id);
+  const { error: cancelErr } = await sb
+    .from("matches")
+    .update({ status: "cancelled", score: "DUP" })
+    .in("fixture_id", phantomIds);
+
+  if (cancelErr) {
+    return [
+      {
+        check: "phantom_duplicates",
+        severity: "warning",
+        message: `Found ${duplicates.length} phantom duplicate(s) but failed to cancel: ${cancelErr.message}`,
+        auto_fixed: false,
+        details: { duplicates },
+      },
+    ];
+  }
+
+  return [
+    {
+      check: "phantom_duplicates",
+      severity: "info",
+      message: `Auto-cancelled ${duplicates.length} phantom Odds API duplicate(s)`,
+      auto_fixed: true,
+      details: { duplicates },
+    },
+  ];
 }
 
 // ─── Persist alerts to DB ────────────────────────────────────
