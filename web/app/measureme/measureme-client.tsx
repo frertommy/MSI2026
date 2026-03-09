@@ -163,9 +163,87 @@ export function MeasureMeClient({
     [settlements, fixtureLookup]
   );
 
+  // ── Top-level summary stats (from all domains) ──
+  const summaryStats = useMemo(() => {
+    // Settlement
+    const n = settlements.length;
+    let sumAbsSurprise = 0, sumSqSurprise = 0, sumAbsDelta = 0, maxDelta = 0;
+    for (const s of settlements) {
+      const diff = Number(s.actual_score_S) - Number(s.E_KR);
+      sumAbsSurprise += Math.abs(diff);
+      sumSqSurprise += diff * diff;
+      const ad = Math.abs(Number(s.delta_B));
+      sumAbsDelta += ad;
+      if (ad > maxDelta) maxDelta = ad;
+    }
+    const brierScore = n > 0 ? sumSqSurprise / n : 0;
+    const meanAbsSurprise = n > 0 ? sumAbsSurprise / n : 0;
+    const meanDelta = n > 0 ? sumAbsDelta / n : 0;
+
+    // KR
+    const degraded = krSnapshots.filter(kr => kr.kr_degraded).length;
+    const avgBooks = krSnapshots.length > 0
+      ? krSnapshots.reduce((s, kr) => s + kr.bookmaker_count, 0) / krSnapshots.length : 0;
+
+    // M1
+    const m1s = teamStates.map(t => Number(t.M1_value));
+    const confs = teamStates.map(t => Number(t.confidence_score ?? 0));
+    const atClamp = m1s.filter(m => Math.abs(m) >= 119).length;
+    const meanM1 = m1s.length > 0 ? m1s.reduce((a, b) => a + b, 0) / m1s.length : 0;
+    const meanConf = confs.length > 0 ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
+    const corr = pearson(teamStates.map(t => Number(t.B_value)), m1s);
+
+    // Index
+    const indices = teamStates.map(t => Number(t.published_index));
+    const minIdx = indices.length > 0 ? Math.min(...indices) : 0;
+    const maxIdx = indices.length > 0 ? Math.max(...indices) : 0;
+    const meanIdx = indices.length > 0 ? indices.reduce((a, b) => a + b, 0) / indices.length : 0;
+
+    const uniqueFixtures = new Set(settlements.map(s => s.fixture_id)).size;
+
+    return {
+      n, brierScore, meanAbsSurprise, meanDelta, maxDelta,
+      degraded, avgBooks, degradedRate: krSnapshots.length > 0 ? degraded / krSnapshots.length : 0,
+      atClamp, clampRate: teamStates.length > 0 ? atClamp / teamStates.length : 0,
+      meanM1, meanConf, corr,
+      minIdx, maxIdx, meanIdx, spread: maxIdx - minIdx,
+      uniqueFixtures,
+    };
+  }, [settlements, krSnapshots, teamStates]);
+
   return (
     <div>
-      {/* Tab bar */}
+      {/* ── TOP SUMMARY — key metrics from all domains ────── */}
+      <div className="mb-8 space-y-4">
+        {/* Row 1: Settlement + System */}
+        <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-8 gap-3">
+          <Stat label="Teams" value={String(teamStates.length)} />
+          <Stat label="Settlements" value={String(summaryStats.n)} />
+          <Stat label="Fixtures" value={String(summaryStats.uniqueFixtures)} />
+          <Stat label="Brier Score" value={fmt(summaryStats.brierScore, 4)} sub="lower = better" />
+          <Stat label="Mean |Surprise|" value={fmt(summaryStats.meanAbsSurprise, 3)} />
+          <Stat label="Mean |ΔB|" value={fmt(summaryStats.meanDelta, 2)} />
+          <Stat label="Max |ΔB|" value={fmt(summaryStats.maxDelta, 2)} />
+          <Stat
+            label="Calibration"
+            value={summaryStats.brierScore < 0.2 ? "Good" : summaryStats.brierScore < 0.25 ? "Fair" : "Poor"}
+            warn={summaryStats.brierScore >= 0.25}
+          />
+        </div>
+        {/* Row 2: KR + M1 + Index */}
+        <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-8 gap-3">
+          <Stat label="KR Snapshots" value={String(krSnapshots.length)} />
+          <Stat label="Avg Bookmakers" value={fmt(summaryStats.avgBooks, 1)} />
+          <Stat label="KR Degraded" value={pct(summaryStats.degradedRate)} warn={summaryStats.degradedRate > 0.05} />
+          <Stat label="Mean M1" value={fmt(summaryStats.meanM1, 1)} />
+          <Stat label="At Clamp (±120)" value={`${summaryStats.atClamp} (${pct(summaryStats.clampRate)})`} warn={summaryStats.clampRate > 0.1} />
+          <Stat label="M1-B Corr" value={fmt(summaryStats.corr, 3)} />
+          <Stat label="Mean Conf" value={fmt(summaryStats.meanConf, 3)} />
+          <Stat label="Index Range" value={`${fmt(summaryStats.minIdx, 0)}–${fmt(summaryStats.maxIdx, 0)}`} sub={`spread: ${fmt(summaryStats.spread, 0)}`} />
+        </div>
+      </div>
+
+      {/* ── Tab bar ──────────────────────────────────────── */}
       <div className="flex flex-wrap gap-2 mb-6">
         {TABS.map((tab) => (
           <button
