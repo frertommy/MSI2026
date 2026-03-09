@@ -10,6 +10,7 @@ let healthData: HealthStatus = {
   lastPollResult: null,
   credits: null,
   nextPollIn: null,
+  watchdog: null,
 };
 
 const startTime = Date.now();

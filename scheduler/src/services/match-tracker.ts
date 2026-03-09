@@ -1,5 +1,5 @@
 import { API_FOOTBALL_KEY, LEAGUE_IDS } from "../config.js";
-import { upsertBatched } from "../api/supabase-client.js";
+import { upsertBatched, getSupabase } from "../api/supabase-client.js";
 import { log } from "../logger.js";
 
 interface ApiFixture {
@@ -114,6 +114,45 @@ export async function refreshMatches(): Promise<{
     allRows,
     "fixture_id"
   );
+
+  // ── Self-healing: if batch failed, retry each failed row individually ──
+  // This handles cases where one bad row (constraint violation, etc.)
+  // would otherwise kill the entire batch and block ALL match updates.
+  if (failed > 0) {
+    log.warn(
+      `Match refresh: batch had ${failed} failures — retrying individually...`
+    );
+
+    const sb = getSupabase();
+    let retrySuccess = 0;
+    let retryFail = 0;
+
+    for (const row of allRows) {
+      const { error } = await sb
+        .from("matches")
+        .upsert([row], { onConflict: "fixture_id" });
+
+      if (error) {
+        retryFail++;
+        log.error(
+          `Match retry failed: fixture ${row.fixture_id} — ${error.message}`
+        );
+      } else {
+        retrySuccess++;
+      }
+    }
+
+    log.info(
+      `Match refresh (retry): ${retrySuccess} succeeded, ${retryFail} still failing`
+    );
+
+    // Return combined totals: original successes + retry successes
+    // The "failed" count is only what's still failing after retry
+    return {
+      upserted: inserted + retrySuccess,
+      failed: retryFail,
+    };
+  }
 
   log.info(`Match refresh: ${inserted} upserted, ${failed} failed`);
   return { upserted: inserted, failed };

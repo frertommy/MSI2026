@@ -18,6 +18,7 @@ import {
 import { refreshMatches } from "./services/match-tracker.js";
 import { CreditTracker } from "./services/credit-tracker.js";
 import { runOracleV1Cycle } from "./services/oracle-v1-cycle.js";
+import { runWatchdog } from "./services/pipeline-watchdog.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
 import type { PollResult } from "./types.js";
 
@@ -123,7 +124,7 @@ export class Scheduler {
       // 3. Refresh match scores (every cycle — 1 min)
       // Needed for timely status='finished' detection so settlement + L reset aren't delayed.
       // Pro plan: 7,500 calls/day, this uses ~7,200 (5 leagues × 1,440 cycles).
-      await refreshMatches();
+      const matchRefreshResult = await refreshMatches();
       // Rebuild lookup after new matches
       this.lookup = await buildTeamLookup();
 
@@ -144,10 +145,37 @@ export class Scheduler {
         }
       }
 
+      // 6. Pipeline watchdog — detect invariant violations, auto-fix, degrade health
+      try {
+        const watchdogResult = await runWatchdog(matchRefreshResult);
+        updateHealth({
+          watchdog: {
+            checks_run: watchdogResult.checks_run,
+            alerts_count: watchdogResult.alerts.length,
+            fixes_applied: watchdogResult.fixes_applied,
+            health_status: watchdogResult.health_status,
+            last_run: new Date().toISOString(),
+          },
+        });
+
+        // Set health status based on watchdog assessment
+        if (watchdogResult.health_status === "critical") {
+          updateHealth({ status: "degraded" });
+        } else {
+          updateHealth({ status: "ok" });
+        }
+      } catch (err) {
+        log.warn(
+          "Watchdog failed",
+          err instanceof Error ? err.message : err
+        );
+      }
+
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
       log.info(`═══ Cycle #${this.cycleCount} complete in ${elapsed}s ═══`);
 
-      updateHealth({ status: "ok" });
+      // Final health status: keep "degraded" if watchdog flagged critical, otherwise "ok"
+      // (the watchdog block above already set "degraded" if critical)
     } catch (err) {
       log.error(
         `Cycle #${this.cycleCount} failed`,

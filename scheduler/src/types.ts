@@ -69,6 +69,14 @@ export interface CreditStatus {
   resetAt: string; // ISO timestamp
 }
 
+export interface WatchdogSummary {
+  checks_run: number;
+  alerts_count: number;
+  fixes_applied: number;
+  health_status: "ok" | "degraded" | "critical";
+  last_run: string | null;
+}
+
 export interface HealthStatus {
   status: "ok" | "degraded" | "error";
   uptime: number;
@@ -76,6 +84,7 @@ export interface HealthStatus {
   lastPollResult: PollResult | null;
   credits: CreditStatus | null;
   nextPollIn: number | null;
+  watchdog: WatchdogSummary | null;
 }
 
 // ─── Team lookup ─────────────────────────────────────────────
