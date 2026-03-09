@@ -33,6 +33,7 @@ export default function RootLayout({
               {[
                 { href: "/", label: "Rankings" },
                 { href: "/oracle", label: "Oracle" },
+                { href: "/oracle-v2", label: "Oracle V2" },
                 { href: "/matches", label: "Matches" },
                 { href: "/measureme", label: "MeasureMe" },
               ].map((link) => (

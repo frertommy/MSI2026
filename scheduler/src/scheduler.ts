@@ -5,6 +5,7 @@ import {
   DAILY_CREDIT_SAFETY,
   POLYMARKET_POLL_INTERVAL,
   ORACLE_V1_ENABLED,
+  ORACLE_V2_ENABLED,
 } from "./config.js";
 import { log } from "./logger.js";
 import { updateHealth } from "./health.js";
@@ -18,6 +19,7 @@ import {
 import { refreshMatches } from "./services/match-tracker.js";
 import { CreditTracker } from "./services/credit-tracker.js";
 import { runOracleV1Cycle } from "./services/oracle-v1-cycle.js";
+import { runOracleV2Cycle } from "./services/oracle-v2-cycle.js";
 import { runWatchdog } from "./services/pipeline-watchdog.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
 import type { PollResult } from "./types.js";
@@ -140,6 +142,18 @@ export class Scheduler {
         } catch (err) {
           log.warn(
             "Oracle V1 cycle failed",
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+
+      // 5b. Oracle V2 cycle — settle with gravity + refresh M1 (parallel to V1)
+      if (ORACLE_V2_ENABLED) {
+        try {
+          await runOracleV2Cycle();
+        } catch (err) {
+          log.warn(
+            "Oracle V2 cycle failed",
             err instanceof Error ? err.message : err
           );
         }

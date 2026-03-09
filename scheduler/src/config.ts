@@ -55,8 +55,9 @@ export const CREDITS_FALLBACK_INTERVAL = 5 * 60 * 1000;     // 5 min fallback wh
 // PRICE_FLOOR, SHOCK_K, CARRY_DECAY_RATE, MA_WINDOW, LIVE_SHOCK_DISCOUNT
 export const BATCH_SIZE = 500;
 
-// ─── Outright futures mapping (DISABLED — all API endpoints return 404) ──
-// Table dropped. Will be replaced by Polymarket futures integration.
+// ─── Outright futures mapping (DEAD — Odds API returns UNKNOWN_SPORT) ──
+// Confirmed 2026-03: these sport keys don't exist in The Odds API.
+// Replaced by Polymarket futures integration (see oracle-v1-futures.ts).
 export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
   "Premier League": "soccer_epl_winner",
   "La Liga": "soccer_spain_la_liga_winner",
@@ -71,7 +72,7 @@ export const PRIMARY_POLL_INTERVAL = 60 * 1000;      // 1 minute — all leagues
 export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000;  // legacy — only used by sub-pollers (Polymarket etc.)
 export const DAILY_CREDIT_SAFETY = 22_000;            // fallback to 5-min if exceeded
 
-// ─── Polymarket data collection (analytics only, no pricing) ─
+// ─── Polymarket data collection (feeds oracle-v1-futures.ts for offseason R_futures) ─
 export const POLYMARKET_SERIES_IDS: Record<string, string> = {
   "Premier League": "10188",
   "La Liga": "10193",
@@ -100,7 +101,28 @@ export const ORACLE_V1_SETTLEMENT_START_DATE = "2025-08-01"; // Only settle matc
 export const ORACLE_V1_ENABLED = true;                 // Oracle V1 always on
 export const ORACLE_V1_LIVE_ENABLED = true;            // Live layer during matches
 export const ORACLE_V1_FEEDBACK_ENABLED = false;       // Stub — no perp mark price yet
-export const ORACLE_V1_OFFSEASON_ENABLED = false;      // Outright sport keys broken (all 404)
+export const ORACLE_V1_OFFSEASON_ENABLED = true;       // Polymarket futures → R_futures → M1 during offseason
+
+// ─── Oracle V1 offseason B-drift constants ───────────────────
+// When regime="offseason", B drifts toward Polymarket-derived R_futures:
+//   ΔB_drift = λ × (R_futures − B), capped at ±MAX_DAILY ELO/day
+export const ORACLE_V1_DRIFT_LAMBDA = 0.02;             // 2% daily pull toward market consensus
+export const ORACLE_V1_DRIFT_MAX_DAILY = 5;             // cap at ±5 ELO per day
+export const ORACLE_V1_DRIFT_MIN_VOLUME = 10_000;       // skip teams with <$10k Polymarket volume
+export const ORACLE_V1_DRIFT_INTERVAL = 24 * 60 * 60 * 1000; // apply once per 24h
+
+// ─── Friendly match settlement ───────────────────────────────
+// Phase 3: settle pre-season friendlies at reduced K-factor
+export const ORACLE_V1_K_FRIENDLY = 10;                 // K=10 for friendlies (vs K=30 for competitive)
+
+// ─── Oracle V2 constants ─────────────────────────────────────
+// V2 = perfect seeds + gravity-on-settlement (γ=0.05)
+// ΔB = K × (S − E_KR) + γ × (R_market − B)
+export const ORACLE_V2_ENABLED = true;
+export const ORACLE_V2_K = 30;
+export const ORACLE_V2_GRAVITY_GAMMA = 0.05;     // gravity pull toward market consensus at settlement
+export const ORACLE_V2_BASELINE_ELO = 1500;       // fallback only — V2 uses optimal_seeds.json
+export const ORACLE_V2_SETTLEMENT_START_DATE = "2025-08-01";
 
 // ─── Legacy odds blend weights (removed — pricing-engine retired) ──
 // See git history for PREMATCH_WEIGHT, LIVE_WEIGHT.
