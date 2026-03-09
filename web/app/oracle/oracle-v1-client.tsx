@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   ReferenceDot,
   ReferenceLine,
+  ReferenceArea,
 } from "recharts";
 import type { TeamOracleRow, SettlementRow, MatchRow, PriceHistoryRow } from "./page";
 
@@ -197,6 +198,8 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
   const [pastMatchData, setPastMatchData] = useState<{
     home: PriceHistoryRow[];
     away: PriceHistoryRow[];
+    kickoff_ts: string;
+    match_end_ts: string;
   } | null>(null);
   const [pastMatchLoading, setPastMatchLoading] = useState(false);
   const [modalYAxisMode, setModalYAxisMode] = useState<YAxisMode>("price");
@@ -266,7 +269,12 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
       );
       if (res.ok) {
         const data = await res.json();
-        setPastMatchData({ home: data.home, away: data.away });
+        setPastMatchData({
+          home: data.home,
+          away: data.away,
+          kickoff_ts: data.kickoff_ts,
+          match_end_ts: data.match_end_ts,
+        });
       }
     } finally {
       setPastMatchLoading(false);
@@ -1038,6 +1046,8 @@ export function OracleV1Client({ teamStates, settlements, matches }: Props) {
                     homeData={pastMatchData.home}
                     awayData={pastMatchData.away}
                     yAxisMode={modalYAxisMode}
+                    kickoffTs={pastMatchData.kickoff_ts}
+                    matchEndTs={pastMatchData.match_end_ts}
                   />
 
                   {pastMatchData.home.length === 0 &&
@@ -1254,11 +1264,15 @@ function MatchPriceChart({
   homeData,
   awayData,
   yAxisMode,
+  kickoffTs: kickoffTsProp,
+  matchEndTs: matchEndTsProp,
 }: {
   match: MatchRow;
   homeData: PriceHistoryRow[];
   awayData: PriceHistoryRow[];
   yAxisMode: YAxisMode;
+  kickoffTs?: string;
+  matchEndTs?: string;
 }) {
   const chartData = useMemo(() => {
     // Merge home and away into a single timeline
@@ -1281,10 +1295,20 @@ function MatchPriceChart({
     return Array.from(pointMap.values()).sort((a, b) => a.ts - b.ts);
   }, [homeData, awayData]);
 
-  const kickoffTs = useMemo(() => {
+  const kickoffMs = useMemo(() => {
+    if (kickoffTsProp) return new Date(kickoffTsProp).getTime();
     const ko = match.commence_time ?? `${match.date}T12:00:00Z`;
     return new Date(ko).getTime();
-  }, [match]);
+  }, [match, kickoffTsProp]);
+
+  const matchEndMs = useMemo(() => {
+    if (matchEndTsProp) return new Date(matchEndTsProp).getTime();
+    return kickoffMs + 2 * 60 * 60 * 1000; // default: KO + 2h
+  }, [kickoffMs, matchEndTsProp]);
+
+  // Fixed domain: 24h before KO → 24h after FT
+  const domainStart = kickoffMs - 24 * 60 * 60 * 1000;
+  const domainEnd = matchEndMs + 24 * 60 * 60 * 1000;
 
   if (chartData.length === 0) return null;
 
@@ -1299,7 +1323,7 @@ function MatchPriceChart({
             dataKey="ts"
             type="number"
             scale="time"
-            domain={["dataMin", "dataMax"]}
+            domain={[domainStart, domainEnd]}
             tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
             axisLine={{ stroke: "#333" }}
             tickLine={false}
@@ -1370,12 +1394,34 @@ function MatchPriceChart({
               );
             }}
           />
+          {/* Match period shading between KO and FT */}
+          <ReferenceArea
+            x1={kickoffMs}
+            x2={matchEndMs}
+            fill="rgba(255,255,255,0.04)"
+            fillOpacity={1}
+            stroke="none"
+          />
+          {/* Kickoff line */}
           <ReferenceLine
-            x={kickoffTs}
+            x={kickoffMs}
             stroke="#666"
             strokeDasharray="4 4"
             label={{
               value: "KO",
+              position: "top",
+              fill: "#888",
+              fontSize: 10,
+              fontFamily: "monospace",
+            }}
+          />
+          {/* Full-time line */}
+          <ReferenceLine
+            x={matchEndMs}
+            stroke="#666"
+            strokeDasharray="4 4"
+            label={{
+              value: "FT",
               position: "top",
               fill: "#888",
               fontSize: 10,

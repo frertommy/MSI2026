@@ -76,8 +76,9 @@ export async function GET(req: NextRequest) {
   const kickoffStr =
     match.commence_time ?? `${match.date}T12:00:00Z`;
   const kickoff = new Date(kickoffStr);
-  const windowStart = new Date(kickoff.getTime() - 24 * 60 * 60 * 1000);
-  const windowEnd = new Date(kickoff.getTime() + 24 * 60 * 60 * 1000);
+  const matchEndEstimate = new Date(kickoff.getTime() + 2 * 60 * 60 * 1000); // +2h
+  const windowStart = new Date(kickoff.getTime() - 24 * 60 * 60 * 1000);     // KO - 24h
+  const windowEnd = new Date(matchEndEstimate.getTime() + 24 * 60 * 60 * 1000); // FT + 24h
 
   const windowStartISO = windowStart.toISOString();
   const windowEndISO = windowEnd.toISOString();
@@ -96,6 +97,8 @@ export async function GET(req: NextRequest) {
     match,
     home: homeDownsampled,
     away: awayDownsampled,
+    kickoff_ts: kickoff.toISOString(),
+    match_end_ts: matchEndEstimate.toISOString(),
   });
 }
 
