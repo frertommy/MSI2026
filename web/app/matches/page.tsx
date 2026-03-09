@@ -370,7 +370,7 @@ function buildUpcomingMatches(
 }
 
 // ─── Page ────────────────────────────────────────────────────
-export const revalidate = 300;
+export const revalidate = 60; // 1 min — matches update frequently during matchdays
 
 export default async function MatchesPage() {
   const [rawMatches, stateMap] = await Promise.all([
