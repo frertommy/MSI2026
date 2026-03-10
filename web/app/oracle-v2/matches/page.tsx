@@ -120,8 +120,8 @@ async function fetchOddsForFixtures(
   const map = new Map<number, OddsResult>();
   if (fixtureIds.length === 0) return map;
 
-  for (let i = 0; i < fixtureIds.length; i += 50) {
-    const batch = fixtureIds.slice(i, i + 50);
+  for (let i = 0; i < fixtureIds.length; i += 10) {
+    const batch = fixtureIds.slice(i, i + 10);
     const { data, error } = await supabase
       .from("latest_odds")
       .select("fixture_id, home_odds, away_odds, draw_odds")
@@ -194,8 +194,8 @@ async function fetchPolymarketForFixtures(
   const map = new Map<number, PolymarketOdds>();
   if (fixtureIds.length === 0) return map;
 
-  for (let i = 0; i < fixtureIds.length; i += 50) {
-    const batch = fixtureIds.slice(i, i + 50);
+  for (let i = 0; i < fixtureIds.length; i += 10) {
+    const batch = fixtureIds.slice(i, i + 10);
     const { data, error } = await supabase
       .from("polymarket_match_odds")
       .select("fixture_id, outcomes, outcome_prices, volume")
