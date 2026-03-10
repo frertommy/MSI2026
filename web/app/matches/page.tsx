@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, batchedIn } from "@/lib/supabase";
 import { MatchesListClient } from "./matches-list-client";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -160,27 +160,19 @@ async function fetchOddsForFixtures(
   const map = new Map<number, OddsResult>();
   if (fixtureIds.length === 0) return map;
 
-  // Read from latest_odds serving table — one row per (fixture, bookmaker)
-  for (let i = 0; i < fixtureIds.length; i += 10) {
-    const batch = fixtureIds.slice(i, i + 10);
-    const { data, error } = await supabase
-      .from("latest_odds")
-      .select("fixture_id, home_odds, away_odds, draw_odds")
-      .in("fixture_id", batch);
+  const allOdds = await batchedIn<OddsRow>(
+    "latest_odds", "fixture_id, home_odds, away_odds, draw_odds", "fixture_id", fixtureIds
+  );
 
-    if (error || !data) continue;
-
-    const grouped = new Map<number, OddsRow[]>();
-    for (const row of data as OddsRow[]) {
-      if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
-      if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
-      if (!grouped.has(row.fixture_id)) grouped.set(row.fixture_id, []);
-      grouped.get(row.fixture_id)!.push(row);
-    }
-
-    for (const [fid, rows] of grouped) {
-      map.set(fid, aggregateOdds(rows));
-    }
+  const grouped = new Map<number, OddsRow[]>();
+  for (const row of allOdds) {
+    if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+    if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
+    if (!grouped.has(row.fixture_id)) grouped.set(row.fixture_id, []);
+    grouped.get(row.fixture_id)!.push(row);
+  }
+  for (const [fid, rows] of grouped) {
+    map.set(fid, aggregateOdds(rows));
   }
 
   // ── Fallback: fixture ID mismatch between API-Football and Odds API ──
@@ -252,24 +244,15 @@ async function fetchPolymarketForFixtures(
   const map = new Map<number, PolymarketOdds>();
   if (fixtureIds.length === 0) return map;
 
-  // Get latest moneyline snapshot per fixture
-  for (let i = 0; i < fixtureIds.length; i += 10) {
-    const batch = fixtureIds.slice(i, i + 10);
-    const { data, error } = await supabase
-      .from("polymarket_match_odds")
-      .select("fixture_id, outcomes, outcome_prices, volume")
-      .eq("market_type", "moneyline")
-      .in("fixture_id", batch)
-      .order("snapshot_time", { ascending: false });
+  const allPoly = await batchedIn<PolymarketRow>(
+    "polymarket_match_odds", "fixture_id, outcomes, outcome_prices, volume", "fixture_id", fixtureIds,
+    { filters: [{ column: "market_type", op: "eq", value: "moneyline" }], order: { column: "snapshot_time", ascending: false } }
+  );
 
-    if (error || !data) continue;
-
-    // Take latest per fixture (ordered desc, so first wins)
-    for (const row of data as PolymarketRow[]) {
-      if (!row.fixture_id || map.has(row.fixture_id)) continue;
-      const parsed = parsePolyRow(row);
-      if (parsed) map.set(row.fixture_id, parsed);
-    }
+  for (const row of allPoly) {
+    if (!row.fixture_id || map.has(row.fixture_id)) continue;
+    const parsed = parsePolyRow(row);
+    if (parsed) map.set(row.fixture_id, parsed);
   }
 
   // Fallback: fixture ID mismatch (Polymarket linked to Odds API ID, web uses API-Football ID)

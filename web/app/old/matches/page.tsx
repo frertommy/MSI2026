@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, batchedIn } from "@/lib/supabase";
 import { MatchesClient } from "./matches-client";
 
 // ─── Types ───────────────────────────────────────────────────
@@ -103,42 +103,32 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
   const map = new Map<number, { homeProb: number; drawProb: number; awayProb: number }>();
   if (fixtureIds.length === 0) return map;
 
-  // Fetch in batches of 10 (stay under Supabase 1000-row default limit)
-  for (let i = 0; i < fixtureIds.length; i += 10) {
-    const batch = fixtureIds.slice(i, i + 10);
-    const { data, error } = await supabase
-      .from("odds_snapshots")
-      .select("fixture_id, home_odds, away_odds, draw_odds")
-      .in("fixture_id", batch);
+  const allOdds = await batchedIn<OddsRow>(
+    "odds_snapshots", "fixture_id, home_odds, away_odds, draw_odds", "fixture_id", fixtureIds
+  );
 
-    if (error || !data) continue;
+  const grouped = new Map<number, OddsRow[]>();
+  for (const row of allOdds) {
+    if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
+    if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
+    if (!grouped.has(row.fixture_id)) grouped.set(row.fixture_id, []);
+    grouped.get(row.fixture_id)!.push(row);
+  }
+  for (const [fid, rows] of grouped) {
+    const homeProbs = rows.map(r => 1 / r.home_odds!);
+    const drawProbs = rows.map(r => 1 / r.draw_odds!);
+    const awayProbs = rows.map(r => 1 / r.away_odds!);
 
-    // Group odds by fixture and average
-    const grouped = new Map<number, OddsRow[]>();
-    for (const row of data as OddsRow[]) {
-      if (!row.home_odds || !row.away_odds || !row.draw_odds) continue;
-      if (row.home_odds <= 0 || row.away_odds <= 0 || row.draw_odds <= 0) continue;
-      if (!grouped.has(row.fixture_id)) grouped.set(row.fixture_id, []);
-      grouped.get(row.fixture_id)!.push(row);
-    }
+    const rawHome = homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length;
+    const rawDraw = drawProbs.reduce((a, b) => a + b, 0) / drawProbs.length;
+    const rawAway = awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length;
 
-    for (const [fid, rows] of grouped) {
-      const homeProbs = rows.map(r => 1 / r.home_odds!);
-      const drawProbs = rows.map(r => 1 / r.draw_odds!);
-      const awayProbs = rows.map(r => 1 / r.away_odds!);
-
-      const rawHome = homeProbs.reduce((a, b) => a + b, 0) / homeProbs.length;
-      const rawDraw = drawProbs.reduce((a, b) => a + b, 0) / drawProbs.length;
-      const rawAway = awayProbs.reduce((a, b) => a + b, 0) / awayProbs.length;
-
-      // Normalize to sum to 1
-      const total = rawHome + rawDraw + rawAway;
-      map.set(fid, {
-        homeProb: rawHome / total,
-        drawProb: rawDraw / total,
-        awayProb: rawAway / total,
-      });
-    }
+    const total = rawHome + rawDraw + rawAway;
+    map.set(fid, {
+      homeProb: rawHome / total,
+      drawProb: rawDraw / total,
+      awayProb: rawAway / total,
+    });
   }
   return map;
 }
