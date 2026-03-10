@@ -103,9 +103,9 @@ async function fetchOddsForFixtures(fixtureIds: number[]): Promise<Map<number, {
   const map = new Map<number, { homeProb: number; drawProb: number; awayProb: number }>();
   if (fixtureIds.length === 0) return map;
 
-  // Fetch in batches of 50
-  for (let i = 0; i < fixtureIds.length; i += 50) {
-    const batch = fixtureIds.slice(i, i + 50);
+  // Fetch in batches of 10 (stay under Supabase 1000-row default limit)
+  for (let i = 0; i < fixtureIds.length; i += 10) {
+    const batch = fixtureIds.slice(i, i + 10);
     const { data, error } = await supabase
       .from("odds_snapshots")
       .select("fixture_id, home_odds, away_odds, draw_odds")
