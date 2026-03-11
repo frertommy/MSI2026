@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   ReferenceDot,
   ReferenceLine,
+  ReferenceArea,
 } from "recharts";
 import type { TeamOracleRow, SettlementRow, MatchRow, PriceHistoryRow } from "./page";
 
@@ -491,13 +492,21 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
     if (!selectedData || selectedData.length === 0) return selectedData;
 
     const days = TIMEFRAME_DAYS[timeframe];
-    if (days >= 9999) return selectedData;
+    if (days >= 9999) {
+      // SEASON: only settlement + live points (skip bootstrap flat line & market_refresh noise)
+      const settlements = selectedData.filter(p =>
+        p.publish_reason.includes("settlement") || p.publish_reason.includes("live_update")
+      );
+      return settlements.length > 0 ? settlements : selectedData;
+    }
 
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    const filtered = selectedData.filter((p) => p.date >= cutoffStr);
+    const filtered = selectedData.filter(
+      (p) => p.date >= cutoffStr && !p.publish_reason.includes("bootstrap")
+    );
 
     if (filtered.length === 0 && selectedData.length > 0) {
       const lastPoint = selectedData[selectedData.length - 1];
@@ -510,6 +519,30 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
 
     return filtered;
   }, [selectedData, timeframe]);
+
+  // ── Match reference lines for non-SEASON timeframes ──────
+  const chartMatches = useMemo(() => {
+    if (!selectedTeam || !filteredChartData || filteredChartData.length === 0) return [];
+    if (timeframe === "SEASON") return [];
+
+    const minTs = filteredChartData[0].dateTs;
+    const maxTs = filteredChartData[filteredChartData.length - 1].dateTs + 86400000;
+
+    return matches
+      .filter(m => m.home_team === selectedTeam || m.away_team === selectedTeam)
+      .filter(m => {
+        const ct = m.commence_time ?? m.date;
+        const kickoff = new Date(ct).getTime();
+        return kickoff >= minTs && kickoff <= maxTs;
+      })
+      .map(m => {
+        const ct = m.commence_time ?? m.date;
+        const kickoff = new Date(ct).getTime();
+        const fullTime = kickoff + 105 * 60 * 1000;
+        const opponent = m.home_team === selectedTeam ? m.away_team : m.home_team;
+        return { kickoff, fullTime, opponent, fixture_id: m.fixture_id };
+      });
+  }, [selectedTeam, filteredChartData, timeframe, matches]);
 
   const selectedState = useMemo(
     () => teamStates.find((t) => t.team_id === selectedTeam) ?? null,
@@ -678,6 +711,7 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
                   tick={{ fill: "#666", fontSize: 10, fontFamily: "monospace" }}
                   axisLine={{ stroke: "#333" }}
                   tickLine={false}
+                  minTickGap={50}
                   tickFormatter={(v: number) => {
                     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
                     const d = new Date(v);
@@ -762,6 +796,30 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
                       stroke="none"
                     />
                   ))}
+                {chartMatches.flatMap((cm) => [
+                  <ReferenceArea
+                    key={`area-${cm.fixture_id}`}
+                    x1={cm.kickoff}
+                    x2={cm.fullTime}
+                    fill="#22d3ee"
+                    fillOpacity={0.05}
+                  />,
+                  <ReferenceLine
+                    key={`ko-${cm.fixture_id}`}
+                    x={cm.kickoff}
+                    stroke="#22d3ee"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.4}
+                    label={{ value: `vs ${cm.opponent}`, position: "insideTopLeft", fill: "#666", fontSize: 9, fontFamily: "monospace" }}
+                  />,
+                  <ReferenceLine
+                    key={`ft-${cm.fixture_id}`}
+                    x={cm.fullTime}
+                    stroke="#22d3ee"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.4}
+                  />,
+                ])}
               </LineChart>
             </ResponsiveContainer>
           </div>
