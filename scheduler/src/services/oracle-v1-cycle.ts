@@ -31,6 +31,7 @@ import { refreshM1 } from "./oracle-v1-market.js";
 import { computeLiveLayer } from "./oracle-v1-live.js";
 import { computeFeedback } from "./oracle-v1-feedback.js";
 import { computeRFutures } from "./oracle-v1-futures.js";
+import { applyOffseasonDrift } from "./oracle-v1-offseason-drift.js";
 import { ORACLE_V1_ENABLED, ORACLE_V1_BASELINE_ELO, ORACLE_V1_SETTLEMENT_START_DATE, ORACLE_V1_LIVE_ENABLED, ORACLE_V1_FEEDBACK_ENABLED, ORACLE_V1_OFFSEASON_ENABLED } from "../config.js";
 import { log } from "../logger.js";
 
@@ -64,6 +65,7 @@ interface CycleResult {
   live_updated: number;
   live_frozen: number;
   feedback_applied: number;
+  drift_applied: number;
   elapsed_ms: number;
 }
 
@@ -126,6 +128,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       live_updated: 0,
       live_frozen: 0,
       feedback_applied: 0,
+      drift_applied: 0,
       elapsed_ms: 0,
     };
   }
@@ -160,6 +163,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       live_updated: 0,
       live_frozen: 0,
       feedback_applied: 0,
+      drift_applied: 0,
       elapsed_ms: Date.now() - cycleStart,
     };
   }
@@ -302,6 +306,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
       live_updated: 0,
       live_frozen: 0,
       feedback_applied: 0,
+      drift_applied: 0,
       elapsed_ms: Date.now() - cycleStart,
     };
   }
@@ -444,6 +449,24 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     }
   }
 
+  // ── Step 3b: Off-season B-drift ──────────────────────────────
+  // When no live matches and no upcoming fixtures for any team,
+  // apply daily B-drift toward Polymarket futures consensus.
+  // This runs within the normal cycle but is frequency-gated (once per 24h per team).
+  let driftApplied = 0;
+
+  if (ORACLE_V1_OFFSEASON_ENABLED && frozenTeams.size === 0) {
+    try {
+      const driftResult = await applyOffseasonDrift();
+      driftApplied = driftResult.teams_drifted;
+    } catch (err) {
+      log.error(
+        `Oracle V1 cycle: offseason drift failed: ` +
+        (err instanceof Error ? err.message : String(err))
+      );
+    }
+  }
+
   // ── Step 4: Apply mark-price feedback F ────────────────────
   let feedbackApplied = 0;
 
@@ -525,7 +548,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     `Oracle V1 cycle complete in ${(elapsed / 1000).toFixed(1)}s — ` +
     `settled=${settledCount} bootstrapped=${bootstrapCount} M1=${m1Refreshed}/${teamsToRefresh.length} ` +
     `live=${liveUpdated}/${frozenTeams.size} frozen=${liveFrozen} ` +
-    `feedback=${feedbackApplied} errors=${settledErrors + m1Errors}`
+    `drift=${driftApplied} feedback=${feedbackApplied} errors=${settledErrors + m1Errors}`
   );
 
   return {
@@ -539,6 +562,7 @@ export async function runOracleV1Cycle(): Promise<CycleResult> {
     live_updated: liveUpdated,
     live_frozen: liveFrozen,
     feedback_applied: feedbackApplied,
+    drift_applied: driftApplied,
     elapsed_ms: elapsed,
   };
 }

@@ -11,6 +11,7 @@ export interface MatchInfo {
   away_team: string;
   score: string | null;
   status: string;
+  commence_time: string | null;
 }
 
 export interface OracleState {
@@ -44,7 +45,7 @@ export function indexToPrice(index: number): number {
 async function fetchMatch(fixtureId: number): Promise<MatchInfo | null> {
   const { data, error } = await supabase
     .from("matches")
-    .select("fixture_id, date, league, home_team, away_team, score, status")
+    .select("fixture_id, date, league, home_team, away_team, score, status, commence_time")
     .eq("fixture_id", fixtureId)
     .limit(1)
     .single();
@@ -75,10 +76,15 @@ async function fetchOracleState(teams: string[]): Promise<Map<string, OracleStat
   return map;
 }
 
-async function fetchPriceHistory(teams: string[]): Promise<PriceHistoryPoint[]> {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 3);
-  const cutoffStr = cutoff.toISOString();
+async function fetchPriceHistory(
+  teams: string[],
+  match: MatchInfo,
+): Promise<PriceHistoryPoint[]> {
+  // Use 48h window centered on kickoff (KO-24h to KO+24h)
+  const kickoffStr = match.commence_time ?? `${match.date}T12:00:00Z`;
+  const kickoff = new Date(kickoffStr);
+  const windowStart = new Date(kickoff.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const windowEnd = new Date(kickoff.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   const all: PriceHistoryPoint[] = [];
   for (const team of teams) {
@@ -86,7 +92,8 @@ async function fetchPriceHistory(teams: string[]): Promise<PriceHistoryPoint[]> 
       .from("oracle_price_history")
       .select("team, timestamp, published_index, b_value, m1_value, publish_reason")
       .eq("team", team)
-      .gte("timestamp", cutoffStr)
+      .gte("timestamp", windowStart)
+      .lte("timestamp", windowEnd)
       .order("timestamp", { ascending: true });
 
     if (error) {
@@ -188,7 +195,7 @@ export default async function MatchDetailPage({
 
   const [stateMap, priceHistory, odds] = await Promise.all([
     fetchOracleState(teams),
-    fetchPriceHistory(teams),
+    fetchPriceHistory(teams, match),
     fetchOdds(fixtureId, match),
   ]);
 

@@ -126,24 +126,30 @@ export const ORACLE_V2_BASELINE_ELO = 1500;       // fallback only — V2 uses o
 export const ORACLE_V2_SETTLEMENT_START_DATE = "2025-08-01";
 
 // ─── Oracle V3 constants ─────────────────────────────────────
-// V3 = simultaneous Bradley-Terry MAP solve (replaces single-fixture inversion)
-// ΔB = K × (S − E_KR) + γ × (R_v3_frozen − B)
-export const ORACLE_V3_ENABLED = false;               // flip after reseed
+// V3 = simultaneous Bradley-Terry MAP solve + alpha formula + R_next
+// published = B + M1 = 0.6×B + 0.4×R_market
+// R_market = 0.85×R_network + 0.15×R_next
+// ΔB = K×(S−E_KR) + γ×(R_market_frozen−B), cause-effect clamped
+export const ORACLE_V3_ENABLED = true;                // V3 live — backfill complete 2026-03-11
 export const ORACLE_V3_LIVE_ENABLED = true;            // Live layer during matches (L = K × (E_live − E_KR))
 export const ORACLE_V3_K = 30;
-export const ORACLE_V3_GRAVITY_GAMMA = 0.08;           // stronger gravity — BT ratings are less noisy
+export const ORACLE_V3_GRAVITY_GAMMA = 0.08;           // B converges ~96% over a full season (1-0.92^38)
+export const ORACLE_V3_ALPHA = 0.40;                   // PT floor = 0.60. M1 = α × (R_market − B)
+export const ORACLE_V3_W_NEXT = 0.15;                  // R_market = (1-w)×R_network + w×R_next. 6% of price from next fixture.
+export const ORACLE_V3_M1_CLAMP = 120;                 // Safety rail ±120 ELO on M1
 export const ORACLE_V3_BASELINE_ELO = 1500;            // fallback only — V3 uses V2 seeds
 export const ORACLE_V3_SETTLEMENT_START_DATE = "2025-08-01";
 
 // Bradley-Terry solver parameters
-export const ORACLE_V3_BT_SIGMA_PRIOR = 450;           // Gaussian prior σ — weaker prior lets solver disagree more (was 80)
+export const ORACLE_V3_BT_SIGMA_PRIOR = 300;           // Gaussian prior σ — room to disagree with B while staying stable
 export const ORACLE_V3_BT_HOME_ADV = 65;               // home advantage in Elo points
-export const ORACLE_V3_BT_WINDOW_DAYS = 30;            // 30-day BACKWARD window of played fixtures (was 7d forward)
-export const ORACLE_V3_BT_WINDOW_EXPAND = 45;          // expand to 45d if < MIN_FIXTURES in 30d (was 14d)
+export const ORACLE_V3_BT_WINDOW_DAYS = 30;            // 30-day window of past + upcoming fixtures
+export const ORACLE_V3_BT_WINDOW_EXPAND = 45;          // expand to 45d if < MIN_FIXTURES in 30d
 export const ORACLE_V3_BT_MIN_FIXTURES = 5;            // minimum for full BT solve
-export const ORACLE_V3_BT_SPARSE_SIGMA = 200;          // tighter prior for 3-4 fixture sparse solve (was 50)
-export const ORACLE_V3_BT_SIGMA_MAX = 900;             // σ_BT ceiling for confidence: bt_conf = clamp(1 - σ/900, 0, 1) (was 150)
-export const ORACLE_V3_BT_WEIGHT_HALFLIFE = 10;        // weight decay half-life in days: w = 1/(1 + daysAgo/10)
+export const ORACLE_V3_BT_SPARSE_SIGMA = 200;          // tighter prior for 3-4 fixture sparse solve
+export const ORACLE_V3_BT_SIGMA_MAX = 900;             // σ_BT ceiling for confidence display
+export const ORACLE_V3_BT_PAST_DECAY_HL = 14;          // past fixtures: w = 1/(1 + daysAgo/14)
+export const ORACLE_V3_BT_FWD_DECAY_HL = 7;            // upcoming fixtures: w = 1/(1 + daysForward/7)
 
 // ─── Legacy odds blend weights (removed — pricing-engine retired) ──
 // See git history for PREMATCH_WEIGHT, LIVE_WEIGHT.

@@ -7,6 +7,11 @@ interface DropdownItem {
   label: string;
 }
 
+const v3Links: DropdownItem[] = [
+  { href: "/oracle-v3/matches", label: "Matches" },
+  { href: "/oracle-v3/diagnostics", label: "Diagnostics" },
+];
+
 const v2Links: DropdownItem[] = [
   { href: "/oracle-v2/matches", label: "Matches" },
   { href: "/oracle-v2/diagnostics", label: "Diagnostics" },
@@ -104,10 +109,16 @@ export function Nav() {
 
         <div className="flex items-center gap-5 ml-auto">
           <NavDropdown
-            label="Oracle V2"
+            label="Oracle V3"
+            href="/oracle-v3"
+            items={v3Links}
+            accent
+          />
+          <span className="text-xs text-muted/30 font-mono">|</span>
+          <NavDropdown
+            label="V2"
             href="/oracle-v2"
             items={v2Links}
-            accent
           />
           <span className="text-xs text-muted/30 font-mono">|</span>
           <NavDropdown

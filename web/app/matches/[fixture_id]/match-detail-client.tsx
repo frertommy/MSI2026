@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  ReferenceArea,
   CartesianGrid,
 } from "recharts";
 import type {
@@ -47,6 +48,11 @@ const LEAGUE_BG: Record<string, string> = {
   "Serie A": "bg-blue-400/10 border-blue-400/20",
   "Ligue 1": "bg-cyan-400/10 border-cyan-400/20",
 };
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 const tooltipStyle: React.CSSProperties = {
   backgroundColor: "#111",
@@ -119,6 +125,7 @@ function formatPctDelta(pct: number): string {
 // ─── Chart types ─────────────────────────────────────────────
 interface ChartRow {
   ts: string;
+  tsMs: number;
   dateLabel: string;
   homePrice: number | null;
   awayPrice: number | null;
@@ -167,18 +174,14 @@ export function MatchDetailClient({
       if (pt.team === match.away_team) entry.awayPrice = price;
     }
 
-    const months = [
-      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-
     return [...bucketMap.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([ts, vals]) => {
         const d = new Date(ts);
         return {
           ts,
-          dateLabel: `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCHours().toString().padStart(2, "0")}:00`,
+          tsMs: d.getTime(),
+          dateLabel: `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCHours().toString().padStart(2, "0")}:00`,
           homePrice: vals.homePrice,
           awayPrice: vals.awayPrice,
         };
@@ -213,6 +216,16 @@ export function MatchDetailClient({
     : null;
 
   // Y-axis domain
+  // Compute KO / FT timestamps for reference lines (epoch ms)
+  const { kickoffMs, matchEndMs } = useMemo(() => {
+    if (!match.commence_time) return { kickoffMs: null, matchEndMs: null };
+    const ko = new Date(match.commence_time);
+    return {
+      kickoffMs: ko.getTime(),
+      matchEndMs: ko.getTime() + 2 * 60 * 60 * 1000, // KO + 2h estimate
+    };
+  }, [match.commence_time]);
+
   const allPrices = chartData.flatMap((d) =>
     [d.homePrice, d.awayPrice].filter((p): p is number => p != null)
   );
@@ -328,7 +341,7 @@ export function MatchDetailClient({
           <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">
             Index History
           </h2>
-          <span className="text-[10px] text-muted font-mono">Last 3 days</span>
+          <span className="text-[10px] text-muted font-mono">±24h from kickoff</span>
           <div className="flex items-center gap-4 ml-auto text-xs font-mono text-muted">
             <span className="flex items-center gap-1.5">
               <span
@@ -360,7 +373,9 @@ export function MatchDetailClient({
                   vertical={false}
                 />
                 <XAxis
-                  dataKey="dateLabel"
+                  dataKey="tsMs"
+                  type="number"
+                  domain={["dataMin", "dataMax"]}
                   tick={{
                     fill: "#666",
                     fontSize: 10,
@@ -368,6 +383,10 @@ export function MatchDetailClient({
                   }}
                   axisLine={{ stroke: "#333" }}
                   tickLine={false}
+                  tickFormatter={(v: number) => {
+                    const d = new Date(v);
+                    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCHours().toString().padStart(2, "0")}:00`;
+                  }}
                 />
                 <YAxis
                   domain={[yMin, yMax]}
@@ -410,14 +429,41 @@ export function MatchDetailClient({
                     );
                   }}
                 />
-                {hasResult && (
+                {/* Match period shading */}
+                {kickoffMs != null && matchEndMs != null && (
+                  <ReferenceArea
+                    x1={kickoffMs}
+                    x2={matchEndMs}
+                    fill="rgba(255,255,255,0.04)"
+                    fillOpacity={1}
+                    stroke="none"
+                  />
+                )}
+                {/* Kickoff line */}
+                {kickoffMs != null && (
                   <ReferenceLine
-                    y={0}
-                    stroke="transparent"
+                    x={kickoffMs}
+                    stroke="#666"
+                    strokeDasharray="4 4"
                     label={{
-                      value: `FT ${match.score}`,
+                      value: "KO",
                       position: "top",
-                      fill: "#c8c8c8",
+                      fill: "#888",
+                      fontSize: 10,
+                      fontFamily: "monospace",
+                    }}
+                  />
+                )}
+                {/* Full-time line */}
+                {matchEndMs != null && (
+                  <ReferenceLine
+                    x={matchEndMs}
+                    stroke="#666"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: hasResult ? `FT ${match.score}` : "FT",
+                      position: "top",
+                      fill: "#888",
                       fontSize: 10,
                       fontFamily: "monospace",
                     }}
