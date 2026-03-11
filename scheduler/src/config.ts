@@ -45,7 +45,7 @@ export const POLL_INTERVALS = {
 } as const;
 
 // ─── Credit limits (Mega plan: 5M credits/month) ────────────
-export const CREDITS_DAILY_SOFT_LIMIT = 25_000;              // 1-min full markets ≈ 21,600/day + headroom
+export const CREDITS_DAILY_SOFT_LIMIT = 250_000;             // 10x headroom — Mega plan allows ~166K/day
 export const CREDITS_PER_LEAGUE_CALL = 3;                    // h2h + totals + spreads = 3 credits
 export const CREDITS_FALLBACK_INTERVAL = 5 * 60 * 1000;     // 5 min fallback when credits low
 
@@ -70,7 +70,7 @@ export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 // ─── Primary polling interval ────────────────────────────────
 export const PRIMARY_POLL_INTERVAL = 60 * 1000;      // 1 minute — all leagues, all markets, 24/7
 export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000;  // legacy — only used by sub-pollers (Polymarket etc.)
-export const DAILY_CREDIT_SAFETY = 22_000;            // fallback to 5-min if exceeded
+export const DAILY_CREDIT_SAFETY = 220_000;           // fallback to 5-min if exceeded
 
 // ─── Polymarket data collection (feeds oracle-v1-futures.ts for offseason R_futures) ─
 export const POLYMARKET_SERIES_IDS: Record<string, string> = {
@@ -119,10 +119,31 @@ export const ORACLE_V1_K_FRIENDLY = 10;                 // K=10 for friendlies (
 // V2 = perfect seeds + gravity-on-settlement (γ=0.05)
 // ΔB = K × (S − E_KR) + γ × (R_market − B)
 export const ORACLE_V2_ENABLED = true;
+export const ORACLE_V2_LIVE_ENABLED = true;       // Live layer during matches (L = K × (E_live − E_KR))
 export const ORACLE_V2_K = 30;
 export const ORACLE_V2_GRAVITY_GAMMA = 0.05;     // gravity pull toward market consensus at settlement
 export const ORACLE_V2_BASELINE_ELO = 1500;       // fallback only — V2 uses optimal_seeds.json
 export const ORACLE_V2_SETTLEMENT_START_DATE = "2025-08-01";
+
+// ─── Oracle V3 constants ─────────────────────────────────────
+// V3 = simultaneous Bradley-Terry MAP solve (replaces single-fixture inversion)
+// ΔB = K × (S − E_KR) + γ × (R_v3_frozen − B)
+export const ORACLE_V3_ENABLED = false;               // flip after reseed
+export const ORACLE_V3_LIVE_ENABLED = true;            // Live layer during matches (L = K × (E_live − E_KR))
+export const ORACLE_V3_K = 30;
+export const ORACLE_V3_GRAVITY_GAMMA = 0.08;           // stronger gravity — BT ratings are less noisy
+export const ORACLE_V3_BASELINE_ELO = 1500;            // fallback only — V3 uses V2 seeds
+export const ORACLE_V3_SETTLEMENT_START_DATE = "2025-08-01";
+
+// Bradley-Terry solver parameters
+export const ORACLE_V3_BT_SIGMA_PRIOR = 450;           // Gaussian prior σ — weaker prior lets solver disagree more (was 80)
+export const ORACLE_V3_BT_HOME_ADV = 65;               // home advantage in Elo points
+export const ORACLE_V3_BT_WINDOW_DAYS = 30;            // 30-day BACKWARD window of played fixtures (was 7d forward)
+export const ORACLE_V3_BT_WINDOW_EXPAND = 45;          // expand to 45d if < MIN_FIXTURES in 30d (was 14d)
+export const ORACLE_V3_BT_MIN_FIXTURES = 5;            // minimum for full BT solve
+export const ORACLE_V3_BT_SPARSE_SIGMA = 200;          // tighter prior for 3-4 fixture sparse solve (was 50)
+export const ORACLE_V3_BT_SIGMA_MAX = 900;             // σ_BT ceiling for confidence: bt_conf = clamp(1 - σ/900, 0, 1) (was 150)
+export const ORACLE_V3_BT_WEIGHT_HALFLIFE = 10;        // weight decay half-life in days: w = 1/(1 + daysAgo/10)
 
 // ─── Legacy odds blend weights (removed — pricing-engine retired) ──
 // See git history for PREMATCH_WEIGHT, LIVE_WEIGHT.
