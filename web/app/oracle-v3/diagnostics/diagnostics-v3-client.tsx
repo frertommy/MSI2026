@@ -535,9 +535,9 @@ export function DiagnosticsV3Client({
           <Stat label="K (Settlement)" value="30" sub="ΔB = K(S-E_KR) + γ(R_v3_frozen - B)" />
           <Stat label="Gravity γ" value="0.08" />
           <Stat label="M1 Clamp" value="±120" />
-          <Stat label="BT Window" value="7d" sub="expand to 14d if sparse" />
+          <Stat label="BT Window" value="30d" sub="expand to 45d if sparse" />
           <Stat label="BT Home Adv" value="65 Elo" />
-          <Stat label="BT σ Prior" value="80" />
+          <Stat label="BT σ Prior" value="300" />
         </div>
       </section>
 
