@@ -308,9 +308,12 @@ async function handleKickoffFreezeV3(
 
     // Only freeze once per match
     if (state.m1_locked === null || state.m1_locked === undefined) {
-      const m1Value = Number(state.m1_value) ?? 0;
-      const rMarketAtKickoff = state.r_market != null ? Number(state.r_market)
-        : (Number(state.b_value) + m1Value);
+      const m1Raw = Number(state.m1_value);
+      const m1Value = isNaN(m1Raw) ? 0 : m1Raw;
+      const rMarketRaw = state.r_market != null ? Number(state.r_market) : NaN;
+      const rMarketAtKickoff = isNaN(rMarketRaw)
+        ? (Number(state.b_value) + m1Value)
+        : rMarketRaw;
 
       const { error: lockErr } = await sb
         .from("team_oracle_v3_state")

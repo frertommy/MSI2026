@@ -12,6 +12,9 @@ import { supabase } from "@/lib/supabase";
 const LEAGUE_MAP: Record<string, string> = {
   epl: "Premier League",
   laliga: "La Liga",
+  bundesliga: "Bundesliga",
+  seriea: "Serie A",
+  ligue1: "Ligue 1",
 };
 
 const CORS_HEADERS = {
@@ -20,19 +23,30 @@ const CORS_HEADERS = {
 };
 
 async function buildTeamLeagueMap(): Promise<Map<string, string>> {
-  const { data, error } = await supabase
-    .from("matches")
-    .select("home_team, league")
-    .in("league", ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1"]);
-
-  if (error || !data) return new Map();
-
+  const allLeagues = ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1"];
   const map = new Map<string, string>();
-  for (const row of data as unknown as { home_team: string; league: string }[]) {
-    if (!map.has(row.home_team)) {
-      map.set(row.home_team, row.league);
+  const pageSize = 1000;
+  let from = 0;
+
+  // Paginate to avoid Supabase 1000-row default limit
+  while (true) {
+    const { data, error } = await supabase
+      .from("matches")
+      .select("home_team, away_team, league")
+      .in("league", allLeagues)
+      .range(from, from + pageSize - 1);
+
+    if (error || !data || data.length === 0) break;
+
+    for (const row of data as unknown as { home_team: string; away_team: string; league: string }[]) {
+      if (!map.has(row.home_team)) map.set(row.home_team, row.league);
+      if (!map.has(row.away_team)) map.set(row.away_team, row.league);
     }
+
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
+
   return map;
 }
 
@@ -55,7 +69,7 @@ export async function GET(req: NextRequest) {
     if (leagueParam && !LEAGUE_MAP[leagueParam]) {
       return NextResponse.json(
         {
-          error: `Invalid league param: "${leagueParam}". Use "epl" or "laliga".`,
+          error: `Invalid league param: "${leagueParam}". Use "epl", "laliga", "bundesliga", "seriea", or "ligue1".`,
         },
         { status: 400, headers: CORS_HEADERS }
       );

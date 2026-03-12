@@ -14,7 +14,7 @@ const CORS_HEADERS = {
   "Cache-Control": "public, max-age=5",
 };
 
-const V3_REASONS = ["bootstrap_v3", "settlement_v3", "market_refresh_v3"];
+const V3_REASONS = ["bootstrap_v3", "settlement_v3", "market_refresh_v3", "live_update_v3"];
 
 interface PriceHistoryRow {
   id: number;

@@ -293,25 +293,22 @@ export async function solveBTForLeague(
     teamsUpdated++;
   }
 
-  // Batch write state updates
+  // Batch write state updates — use upsert directly to handle missing rows
   for (const row of stateUpserts) {
     const { error: upsertErr } = await sb
       .from("team_oracle_v3_state")
-      .update({
+      .upsert([{
+        team_id: row.team_id,
+        season: deriveSeason(new Date().toISOString()),
         r_network: row.r_network, r_next: row.r_next, r_market: row.r_market,
         m1_value: row.m1_value, published_index: row.published_index,
         confidence_score: row.confidence_score, bt_std_error: row.bt_std_error,
         next_fixture_id: row.next_fixture_id, last_bt_solve_ts: row.last_bt_solve_ts,
         last_market_refresh_ts: row.last_market_refresh_ts, updated_at: row.updated_at,
-      })
-      .eq("team_id", row.team_id);
+        b_value: priorMeans.get(row.team_id as string) ?? 1500,
+      }], { onConflict: "team_id" });
 
-    if (upsertErr) {
-      const { error: fallbackErr } = await sb
-        .from("team_oracle_v3_state")
-        .upsert([row], { onConflict: "team_id" });
-      if (fallbackErr) log.error(`V3 BT: state upsert failed for ${row.team_id}: ${fallbackErr.message}`);
-    }
+    if (upsertErr) log.error(`V3 BT: state upsert failed for ${row.team_id}: ${upsertErr.message}`);
   }
 
   // Write price history
@@ -675,6 +672,14 @@ async function zeroMarketForLeague(
       last_market_refresh_ts: nowIso, updated_at: nowIso,
     }).eq("team_id", row.team_id);
   }
+}
+
+function deriveSeason(date: string): string {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  if (month >= 7) return `${year}-${(year + 1).toString().slice(2)}`;
+  return `${year - 1}-${year.toString().slice(2)}`;
 }
 
 function mkBTResult(

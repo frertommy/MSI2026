@@ -19,6 +19,9 @@ import { supabase } from "@/lib/supabase";
 const LEAGUE_MAP: Record<string, string> = {
   epl: "Premier League",
   laliga: "La Liga",
+  bundesliga: "Bundesliga",
+  seriea: "Serie A",
+  ligue1: "Ligue 1",
 };
 
 const CORS_HEADERS = {
@@ -71,7 +74,7 @@ export async function GET(req: NextRequest) {
     if (leagueParam && !LEAGUE_MAP[leagueParam]) {
       return NextResponse.json(
         {
-          error: `Invalid league param: "${leagueParam}". Use "epl" or "laliga".`,
+          error: `Invalid league param: "${leagueParam}". Use "epl", "laliga", "bundesliga", "seriea", or "ligue1".`,
         },
         { status: 400, headers: CORS_HEADERS }
       );
@@ -95,7 +98,7 @@ export async function GET(req: NextRequest) {
 
     const leagues = leagueParam
       ? [LEAGUE_MAP[leagueParam]]
-      : ["Premier League", "La Liga"];
+      : ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1"];
 
     const results: unknown[] = [];
 

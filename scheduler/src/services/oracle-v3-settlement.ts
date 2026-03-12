@@ -354,7 +354,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
     });
   }
 
-  // Write settlement_log
+  // Write settlement_log first (idempotency gate — if this succeeds, we MUST complete state writes)
   if (logRows.length > 0) {
     const { error: logErr } = await sb.from("settlement_log").insert(logRows);
     if (logErr) {
@@ -366,17 +366,23 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
     }
   }
 
-  // Upsert team_oracle_v3_state
+  // Upsert team_oracle_v3_state — retry up to 3 times on failure since log is already written
   for (const row of stateUpserts) {
-    const { error: stateErr } = await sb
-      .from("team_oracle_v3_state")
-      .upsert([row], { onConflict: "team_id" });
-    if (stateErr) {
-      throw new Error(`team_oracle_v3_state upsert failed for ${row.team_id}: ${stateErr.message}`);
+    let stateWritten = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const { error: stateErr } = await sb
+        .from("team_oracle_v3_state")
+        .upsert([row], { onConflict: "team_id" });
+      if (!stateErr) { stateWritten = true; break; }
+      log.warn(`V3 Settlement: state upsert attempt ${attempt}/3 failed for ${row.team_id}: ${stateErr.message}`);
+      if (attempt < 3) await new Promise(r => setTimeout(r, 500 * attempt));
+    }
+    if (!stateWritten) {
+      log.error(`V3 Settlement: CRITICAL — settlement_log written but state upsert failed for ${row.team_id} fixture ${fixtureId}. B may be stale. Manual intervention needed.`);
     }
   }
 
-  // Append price history
+  // Append price history (non-critical — warn only)
   if (priceHistoryRows.length > 0) {
     const { error: phErr } = await sb.from("oracle_price_history").insert(priceHistoryRows);
     if (phErr) log.warn(`V3 Price history insert failed for fixture ${fixtureId}: ${phErr.message}`);
