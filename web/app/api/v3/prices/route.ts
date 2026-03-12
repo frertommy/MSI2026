@@ -55,7 +55,6 @@ interface StateRow {
   b_value: number;
   m1_value: number;
   l_value: number;
-  f_value: number;
   published_index: number;
   confidence_score: number | null;
   bt_std_error: number | null;
@@ -81,7 +80,7 @@ export async function GET(req: NextRequest) {
       supabase
         .from("team_oracle_v3_state")
         .select(
-          "team_id, b_value, m1_value, l_value, f_value, published_index, confidence_score, bt_std_error, updated_at"
+          "team_id, b_value, m1_value, l_value, published_index, confidence_score, bt_std_error, updated_at"
         ),
       buildTeamLeagueMap(),
     ]);
@@ -118,7 +117,6 @@ export async function GET(req: NextRequest) {
           b: Math.round(Number(r.b_value) * 100) / 100,
           m1: Math.round(Number(r.m1_value) * 100) / 100,
           l: Math.round(Number(r.l_value ?? 0) * 100) / 100,
-          f: Math.round(Number(r.f_value ?? 0) * 100) / 100,
         },
         confidence:
           Math.round(Number(r.confidence_score ?? 0) * 100) / 100,

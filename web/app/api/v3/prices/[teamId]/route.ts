@@ -67,7 +67,7 @@ export async function GET(
     const { data: stateData, error: stateErr } = await supabase
       .from("team_oracle_v3_state")
       .select(
-        "team_id, b_value, m1_value, l_value, f_value, published_index, confidence_score, bt_std_error, updated_at"
+        "team_id, b_value, m1_value, l_value, published_index, confidence_score, bt_std_error, updated_at"
       )
       .eq("team_id", decodedTeamId)
       .single();
@@ -84,7 +84,6 @@ export async function GET(
       b_value: number;
       m1_value: number;
       l_value: number;
-      f_value: number;
       published_index: number;
       confidence_score: number | null;
       bt_std_error: number | null;
@@ -121,7 +120,6 @@ export async function GET(
         b: Math.round(Number(state.b_value) * 100) / 100,
         m1: Math.round(Number(state.m1_value) * 100) / 100,
         l: Math.round(Number(state.l_value ?? 0) * 100) / 100,
-        f: Math.round(Number(state.f_value ?? 0) * 100) / 100,
       },
       confidence:
         Math.round(Number(state.confidence_score ?? 0) * 100) / 100,

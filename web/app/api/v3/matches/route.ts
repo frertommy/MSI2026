@@ -11,8 +11,8 @@ import { supabase } from "@/lib/supabase";
  *   limit (optional): default 20, max 50
  *
  * Notes:
- *   - Match status values in DB: "upcoming", "finished", "cancelled" (no "scheduled")
- *   - Predictions use K=30 and exclude gravity nudge (γ=0.08 × drift)
+ *   - Match status values in DB: "scheduled", "not_started", "tbd", "finished", "cancelled"
+ *   - Predictions use K=30, exclude gravity nudge and cause-effect clamp
  *   - V3 settlements (oracle_version='v3') may not exist yet — settled section returns empty
  */
 
@@ -173,7 +173,7 @@ export async function GET(req: NextRequest) {
                 delta_price_home: round2((K * (0.0 - eHome)) / 5),
                 delta_price_away: round2((K * (1.0 - eAway)) / 5),
               },
-              note: "Predictions exclude gravity nudge (γ=0.08 * drift).",
+              note: "Predictions exclude gravity nudge (γ=0.08 × drift) and cause-effect clamp. Actual ΔB may differ.",
             };
           }
 
@@ -214,13 +214,13 @@ async function fetchUpcomingMatches(
   leagues: string[],
   limit: number
 ): Promise<MatchRow[]> {
-  // DB status is "upcoming" (no "scheduled" exists)
+  // DB status values for upcoming: "scheduled", "not_started", "tbd"
   const { data, error } = await supabase
     .from("matches")
     .select(
       "fixture_id, league, home_team, away_team, commence_time, status, score"
     )
-    .eq("status", "upcoming")
+    .in("status", ["scheduled", "not_started", "tbd"])
     .in("league", leagues)
     .order("commence_time", { ascending: true })
     .limit(limit);

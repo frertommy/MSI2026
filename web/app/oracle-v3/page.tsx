@@ -93,6 +93,34 @@ async function fetchAll<T>(
   return all;
 }
 
+/** Paginated fetch with a gte filter on a date column. */
+async function fetchAllWithGte<T>(
+  table: string,
+  select: string,
+  gteCol: string,
+  gteVal: string,
+  orderCol?: string,
+  ascending = true
+): Promise<T[]> {
+  const all: T[] = [];
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    let q = supabase.from(table).select(select).gte(gteCol, gteVal).range(from, from + pageSize - 1);
+    if (orderCol) q = q.order(orderCol, { ascending });
+    const { data, error } = await q;
+    if (error) {
+      console.error(`${table} fetch error:`, error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    all.push(...(data as T[]));
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 // ─── Raw settlement type ────────────────────────────────────
 interface RawSettlementRow {
   settlement_id: number;
@@ -124,10 +152,13 @@ export default async function OracleV3Page() {
     false
   );
 
-  const matchesPromise = fetchAll<MatchRow>(
+  // Only fetch recent matches (last 90 days + upcoming) to avoid loading entire season
+  const matchCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const matchesPromise = fetchAllWithGte<MatchRow>(
     "matches",
     "fixture_id, date, league, home_team, away_team, score, status, commence_time",
-    undefined,
+    "date",
+    matchCutoff,
     "date",
     true
   );
@@ -138,10 +169,11 @@ export default async function OracleV3Page() {
     matchesPromise,
   ]);
 
-  // Compute has_error server-side
+  // Compute has_error server-side: B should never be near 0 in V3 (initial B ~1500)
+  // Flag as error only if B_before is unreasonably low (data corruption / null coercion)
   const settlements: SettlementRow[] = rawSettlements.map((s) => ({
     ...s,
-    has_error: Number(s.delta_B) === 0 && Number(s.B_before) === 0,
+    has_error: Number(s.B_before) < 100,
   }));
 
   const teamCount = teamStates.length;

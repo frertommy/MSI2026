@@ -93,6 +93,7 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   let settledCount = 0;
   let settledErrors = 0;
   const leaguesSettled = new Set<string>();
+  const leagueSettleTriggers = new Map<string, number>(); // league → latest settled fixture ID
 
   // Settle sequentially to avoid B_value race conditions
   for (const fixtureId of unsettledFixtures) {
@@ -100,7 +101,10 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
       const result = await settleFixtureV3(fixtureId);
       if (result.settled) {
         settledCount++;
-        if (result.league) leaguesSettled.add(result.league);
+        if (result.league) {
+          leaguesSettled.add(result.league);
+          leagueSettleTriggers.set(result.league, fixtureId);
+        }
       }
     } catch (err) {
       settledErrors++;
@@ -120,17 +124,30 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
 
   // ── Step 1b: BT re-solve for leagues that had settlements ──
   // This is the ONLY time BT re-solves. Not on a timer. Not every cycle.
+  // Retry once on failure (RISK-1) to recover from transient errors.
   let btResolves = 0;
 
   for (const league of leaguesSettled) {
-    try {
-      await solveBTForLeague(league, "settlement");
-      btResolves++;
-    } catch (err) {
-      log.error(
-        `Oracle V3 cycle: BT re-solve failed for ${league}: ` +
-        (err instanceof Error ? err.message : String(err))
-      );
+    const triggerFixtureId = leagueSettleTriggers.get(league);
+    let resolved = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await solveBTForLeague(league, "settlement", triggerFixtureId);
+        btResolves++;
+        resolved = true;
+        break;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (attempt < 2) {
+          log.warn(`Oracle V3 cycle: BT re-solve attempt ${attempt}/2 failed for ${league}: ${errMsg} — retrying`);
+          await new Promise(r => setTimeout(r, 1000));
+        } else {
+          log.error(`Oracle V3 cycle: BT re-solve failed for ${league} after 2 attempts: ${errMsg}`);
+        }
+      }
+    }
+    if (!resolved) {
+      log.error(`Oracle V3 cycle: DEGRADED — BT ratings stale for ${league}. Will re-try on next settlement.`);
     }
   }
 
@@ -360,9 +377,12 @@ async function handleKickoffFreezeV3(
       result.set(teamId, { b_value: bValue, r_market_frozen: frozenRMarket, m1_locked: m1Value });
     } else {
       // Already frozen — return existing frozen values
+      // Note: freeze is team-global, not fixture-scoped. This is safe because
+      // a team cannot have two concurrent live matches. Settlement clears the freeze.
       const existingRFrozen = state.r_market_frozen != null ? Number(state.r_market_frozen) : bValue;
       const existingM1 = Number(state.m1_locked);
       result.set(teamId, { b_value: bValue, r_market_frozen: existingRFrozen, m1_locked: isNaN(existingM1) ? 0 : existingM1 });
+      log.debug(`V3 kickoff freeze: ${teamId} already frozen (fixture ${fixtureId}), M1_locked=${existingM1.toFixed(2)}, R_frozen=${existingRFrozen.toFixed(2)}`);
     }
   }
 

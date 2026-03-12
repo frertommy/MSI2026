@@ -25,6 +25,7 @@
 import { getSupabase } from "../api/supabase-client.js";
 import { powerDevigOdds, median } from "./odds-blend.js";
 import { solveBT, type BTFixture, type BTSolveResult } from "./bradley-terry.js";
+import { deriveSeason } from "../utils/derive-season.js";
 import {
   ORACLE_V3_BT_SIGMA_PRIOR,
   ORACLE_V3_BT_HOME_ADV,
@@ -173,11 +174,26 @@ export async function solveBTForLeague(
   const upcomingList = (upcomingFixtures ?? []) as WindowFixture[];
 
   // ── Step 3: Build BT fixtures with proper weighting ────────
+  // Batch-load odds data to avoid N+1 queries (PERF-1)
+  const pastFids = pastList.map(f => f.fixture_id);
+  const upcomingFids = upcomingList.map(f => f.fixture_id);
+
+  const [krBatch, pastOddsBatch, upOddsBatch] = await Promise.all([
+    batchLoadKR(sb, pastFids),
+    batchLoadOdds(sb, pastFids),
+    batchLoadOdds(sb, upcomingFids),
+  ]);
+
   const btFixtures: BTFixture[] = [];
 
-  // Past fixtures: try frozen KR first, fallback to latest_preko_odds
+  // Past fixtures: try frozen KR first, then batch odds, then individual fallback
   for (const fix of pastList) {
-    const es = await loadFixtureES(sb, fix, "past");
+    let es = krBatch.get(fix.fixture_id) ?? null;
+    if (!es) {
+      const odds = pastOddsBatch.get(fix.fixture_id);
+      if (odds && odds.length > 0) es = processOddsToES(odds);
+    }
+    if (!es) es = await loadFixtureES_fallback(sb, fix);
     if (!es) continue;
     const fixDateMs = new Date(fix.commence_time ?? fix.date + "T12:00:00Z").getTime();
     const daysAgo = Math.max(0, (now.getTime() - fixDateMs) / (24 * 3600 * 1000));
@@ -190,9 +206,11 @@ export async function solveBTForLeague(
 
   const pastCount = btFixtures.length;
 
-  // Upcoming fixtures: use live odds from latest_preko_odds
+  // Upcoming fixtures: batch odds first, then individual fallback
   for (const fix of upcomingList) {
-    const es = await loadFixtureES(sb, fix, "upcoming");
+    const odds = upOddsBatch.get(fix.fixture_id);
+    let es = (odds && odds.length > 0) ? processOddsToES(odds) : null;
+    if (!es) es = await loadFixtureES_fallback(sb, fix);
     if (!es) continue;
     const fixDateMs = new Date(fix.commence_time ?? fix.date + "T12:00:00Z").getTime();
     const daysForward = Math.max(0, (fixDateMs - now.getTime()) / (24 * 3600 * 1000));
@@ -269,6 +287,7 @@ export async function solveBTForLeague(
 
     stateUpserts.push({
       team_id: teamId,
+      league,
       r_network: Number(R_network.toFixed(4)),
       r_next: Number(R_next.toFixed(4)),
       r_market: Number(R_market.toFixed(4)),
@@ -285,6 +304,7 @@ export async function solveBTForLeague(
     priceHistoryRows.push({
       team: teamId, league, timestamp: nowIso,
       b_value: Number(B.toFixed(4)), m1_value: Number(M1.toFixed(4)),
+      l_value: 0,
       published_index: Number(published_index.toFixed(4)),
       confidence_score: Number(conf.toFixed(4)),
       source_fixture_id: triggerFixtureId ?? null,
@@ -300,6 +320,7 @@ export async function solveBTForLeague(
       .upsert([{
         team_id: row.team_id,
         season: deriveSeason(new Date().toISOString()),
+        league: row.league,
         r_network: row.r_network, r_next: row.r_next, r_market: row.r_market,
         m1_value: row.m1_value, published_index: row.published_index,
         confidence_score: row.confidence_score, bt_std_error: row.bt_std_error,
@@ -446,6 +467,7 @@ export async function refreshRNextForLeague(league: string): Promise<MarketRefre
     priceHistoryRows.push({
       team: teamId, league, timestamp: nowIso,
       b_value: Number(B.toFixed(4)), m1_value: Number(M1.toFixed(4)),
+      l_value: 0,
       published_index: Number(published_index.toFixed(4)),
       confidence_score: null, source_fixture_id: null,
       publish_reason: "market_refresh_v3",
@@ -512,21 +534,28 @@ async function loadNextFixturesForLeague(
     if (!teamNextFixture.has(fix.away_team)) teamNextFixture.set(fix.away_team, fix);
   }
 
-  // Batch-load odds for needed fixtures
+  // Batch-load odds for needed fixtures (avoids N+1 queries)
   const fixtureIdsNeeded = new Set<number>();
   for (const teamId of teamIds) {
     const fix = teamNextFixture.get(teamId);
     if (fix) fixtureIdsNeeded.add(fix.fixture_id);
   }
 
+  const neededFids = [...fixtureIdsNeeded];
+  const oddsBatch = await batchLoadOdds(sb, neededFids);
+
   const fixtureOddsCache = new Map<number, FixtureES>();
-  for (const fid of fixtureIdsNeeded) {
-    // Use actual fixture data so the fallback path (team-match lookup) works
-    const actualFix = upcoming.find(f => f.fixture_id === fid);
-    const fix: WindowFixture = actualFix
-      ? { fixture_id: fid, date: actualFix.date, home_team: actualFix.home_team, away_team: actualFix.away_team, commence_time: actualFix.commence_time, status: "scheduled", league }
-      : { fixture_id: fid, date: "", home_team: "", away_team: "", commence_time: null, status: "", league };
-    const es = await loadFixtureES(sb, fix, "upcoming");
+  for (const fid of neededFids) {
+    const odds = oddsBatch.get(fid);
+    let es = (odds && odds.length > 0) ? processOddsToES(odds) : null;
+    if (!es) {
+      // Individual fallback for fixture ID mismatch
+      const actualFix = upcoming.find(f => f.fixture_id === fid);
+      if (actualFix) {
+        const fix: WindowFixture = { fixture_id: fid, date: actualFix.date, home_team: actualFix.home_team, away_team: actualFix.away_team, commence_time: actualFix.commence_time, status: "scheduled", league };
+        es = await loadFixtureES_fallback(sb, fix);
+      }
+    }
     if (es) fixtureOddsCache.set(fid, es);
   }
 
@@ -552,10 +581,156 @@ async function loadNextFixturesForLeague(
 }
 
 /**
+ * Process raw odds snapshots into a home expected score.
+ * Filters invalid/stale odds, de-vigs, median consensus, renormalize.
+ * Returns null if < 2 valid bookmakers or NaN result.
+ */
+function processOddsToES(allSnapshots: OddsSnapshotRow[]): FixtureES | null {
+  // Latest per bookmaker
+  const latestByBook = new Map<string, OddsSnapshotRow>();
+  for (const snap of allSnapshots) {
+    if (latestByBook.has(snap.bookmaker)) continue;
+    if (snap.home_odds == null || snap.draw_odds == null || snap.away_odds == null) continue;
+    if (snap.home_odds < 1.01 || snap.draw_odds < 1.01 || snap.away_odds < 1.01) continue;
+    latestByBook.set(snap.bookmaker, snap);
+  }
+
+  // De-vig + median consensus
+  const bookmakerProbs: { homeProb: number; drawProb: number; awayProb: number; snapshotMs: number }[] = [];
+  for (const [, snap] of latestByBook) {
+    const probs = powerDevigOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
+    if (probs.homeProb <= 0 || probs.drawProb <= 0 || probs.awayProb <= 0) continue;
+    if (probs.homeProb >= 1 || probs.drawProb >= 1 || probs.awayProb >= 1) continue;
+    bookmakerProbs.push({
+      homeProb: probs.homeProb, drawProb: probs.drawProb, awayProb: probs.awayProb,
+      snapshotMs: new Date(snap.snapshot_time).getTime(),
+    });
+  }
+
+  if (bookmakerProbs.length < 2) return null;
+
+  const rawHome = median(bookmakerProbs.map(b => b.homeProb));
+  const rawDraw = median(bookmakerProbs.map(b => b.drawProb));
+  const rawAway = median(bookmakerProbs.map(b => b.awayProb));
+  const probTotal = rawHome + rawDraw + rawAway;
+  if (probTotal === 0 || isNaN(probTotal)) return null;
+  const consensusHome = rawHome / probTotal;
+  const consensusDraw = rawDraw / probTotal;
+
+  const homeES = consensusHome + 0.5 * consensusDraw;
+  // NaN guard (RISK-7): reject if computation produced invalid result
+  if (isNaN(homeES)) return null;
+  const latestSnapshotMs = Math.max(...bookmakerProbs.map(b => b.snapshotMs));
+
+  return { homeES: Math.max(0.01, Math.min(0.99, homeES)), latestSnapshotMs };
+}
+
+/**
+ * Batch-load odds from latest_preko_odds for multiple fixture IDs.
+ * Returns Map of fixture_id → OddsSnapshotRow[].
+ */
+async function batchLoadOdds(
+  sb: ReturnType<typeof getSupabase>,
+  fixtureIds: number[],
+): Promise<Map<number, OddsSnapshotRow[]>> {
+  const result = new Map<number, OddsSnapshotRow[]>();
+  if (fixtureIds.length === 0) return result;
+
+  const { data, error } = await sb
+    .from("latest_preko_odds")
+    .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+    .in("fixture_id", fixtureIds);
+
+  if (error) {
+    log.error(`batchLoadOdds: query failed: ${error.message}`);
+    return result;
+  }
+
+  for (const row of (data ?? []) as OddsSnapshotRow[]) {
+    const arr = result.get(row.fixture_id) ?? [];
+    arr.push(row);
+    result.set(row.fixture_id, arr);
+  }
+
+  return result;
+}
+
+/**
+ * Batch-load frozen KR snapshots for multiple fixture IDs.
+ * Returns Map of fixture_id → FixtureES.
+ */
+async function batchLoadKR(
+  sb: ReturnType<typeof getSupabase>,
+  fixtureIds: number[],
+): Promise<Map<number, FixtureES>> {
+  const result = new Map<number, FixtureES>();
+  if (fixtureIds.length === 0) return result;
+
+  const { data, error } = await sb
+    .from("oracle_kr_snapshots")
+    .select("fixture_id, home_expected_score, freeze_timestamp")
+    .in("fixture_id", fixtureIds);
+
+  if (error) {
+    log.error(`batchLoadKR: query failed: ${error.message}`);
+    return result;
+  }
+
+  for (const kr of (data ?? []) as { fixture_id: number; home_expected_score: number; freeze_timestamp: string }[]) {
+    result.set(kr.fixture_id, {
+      homeES: Number(kr.home_expected_score),
+      latestSnapshotMs: new Date(kr.freeze_timestamp).getTime(),
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Load odds for a single fixture with alt-fixture fallback.
+ * Used as fallback when batch loading finds no odds for a fixture.
+ */
+async function loadFixtureES_fallback(
+  sb: ReturnType<typeof getSupabase>,
+  fixture: WindowFixture,
+): Promise<FixtureES | null> {
+  if (!fixture.home_team || !fixture.away_team) return null;
+
+  const dayBefore = new Date(new Date(fixture.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+  const dayAfter = new Date(new Date(fixture.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+  const { data: altFixtures } = await sb
+    .from("matches")
+    .select("fixture_id, home_team, away_team")
+    .eq("home_team", fixture.home_team)
+    .eq("away_team", fixture.away_team)
+    .gte("date", dayBefore)
+    .lte("date", dayAfter)
+    .neq("fixture_id", fixture.fixture_id);
+
+  if (altFixtures) {
+    for (const alt of altFixtures) {
+      const { data: altPreko } = await sb
+        .from("latest_preko_odds")
+        .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
+        .eq("fixture_id", alt.fixture_id as number);
+      if (altPreko && altPreko.length > 0) {
+        return processOddsToES(altPreko as OddsSnapshotRow[]);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Load odds for a fixture, de-vig, compute home ES.
  * Past: tries oracle_kr_snapshots (frozen) first, then latest_preko_odds.
  * Upcoming: uses latest_preko_odds (live).
  * Returns null if < 2 bookmakers.
+ *
+ * NOTE: For batch contexts (solveBTForLeague), prefer batchLoadKR + batchLoadOdds
+ * + processOddsToES + loadFixtureES_fallback to avoid N+1 queries.
  */
 async function loadFixtureES(
   sb: ReturnType<typeof getSupabase>,
@@ -587,63 +762,10 @@ async function loadFixtureES(
 
   // Fallback: fixture ID mismatch (±3 day window, same teams)
   if (allSnapshots.length === 0 && fixture.home_team && fixture.away_team) {
-    const dayBefore = new Date(new Date(fixture.date).getTime() - 3 * 86400000).toISOString().slice(0, 10);
-    const dayAfter = new Date(new Date(fixture.date).getTime() + 3 * 86400000).toISOString().slice(0, 10);
-
-    const { data: altFixtures } = await sb
-      .from("matches")
-      .select("fixture_id, home_team, away_team")
-      .eq("home_team", fixture.home_team)
-      .eq("away_team", fixture.away_team)
-      .gte("date", dayBefore)
-      .lte("date", dayAfter)
-      .neq("fixture_id", fixture.fixture_id);
-
-    if (altFixtures) {
-      for (const alt of altFixtures) {
-        const { data: altPreko } = await sb
-          .from("latest_preko_odds")
-          .select("fixture_id, bookmaker, home_odds, draw_odds, away_odds, snapshot_time")
-          .eq("fixture_id", alt.fixture_id as number);
-        if (altPreko && altPreko.length > 0) { allSnapshots = altPreko as OddsSnapshotRow[]; break; }
-      }
-    }
+    return loadFixtureES_fallback(sb, fixture);
   }
 
-  // Latest per bookmaker
-  const latestByBook = new Map<string, OddsSnapshotRow>();
-  for (const snap of allSnapshots) {
-    if (latestByBook.has(snap.bookmaker)) continue;
-    if (snap.home_odds == null || snap.draw_odds == null || snap.away_odds == null) continue;
-    if (snap.home_odds < 1.01 || snap.draw_odds < 1.01 || snap.away_odds < 1.01) continue;
-    latestByBook.set(snap.bookmaker, snap);
-  }
-
-  // De-vig + median consensus
-  const bookmakerProbs: { homeProb: number; drawProb: number; awayProb: number; snapshotMs: number }[] = [];
-  for (const [, snap] of latestByBook) {
-    const probs = powerDevigOdds(snap.home_odds!, snap.draw_odds!, snap.away_odds!);
-    if (probs.homeProb <= 0 || probs.drawProb <= 0 || probs.awayProb <= 0) continue;
-    if (probs.homeProb >= 1 || probs.drawProb >= 1 || probs.awayProb >= 1) continue;
-    bookmakerProbs.push({
-      homeProb: probs.homeProb, drawProb: probs.drawProb, awayProb: probs.awayProb,
-      snapshotMs: new Date(snap.snapshot_time).getTime(),
-    });
-  }
-
-  if (bookmakerProbs.length < 2) return null;
-
-  const rawHome = median(bookmakerProbs.map(b => b.homeProb));
-  const rawDraw = median(bookmakerProbs.map(b => b.drawProb));
-  const rawAway = median(bookmakerProbs.map(b => b.awayProb));
-  const probTotal = rawHome + rawDraw + rawAway;
-  const consensusHome = rawHome / probTotal;
-  const consensusDraw = rawDraw / probTotal;
-
-  const homeES = Math.max(0.01, Math.min(0.99, consensusHome + 0.5 * consensusDraw));
-  const latestSnapshotMs = Math.max(...bookmakerProbs.map(b => b.snapshotMs));
-
-  return { homeES, latestSnapshotMs };
+  return processOddsToES(allSnapshots);
 }
 
 /** Zero M1 for all teams in a league when insufficient fixtures. */
@@ -673,14 +795,6 @@ async function zeroMarketForLeague(
       last_market_refresh_ts: nowIso, updated_at: nowIso,
     }).eq("team_id", row.team_id);
   }
-}
-
-function deriveSeason(date: string): string {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  if (month >= 7) return `${year}-${(year + 1).toString().slice(2)}`;
-  return `${year - 1}-${year.toString().slice(2)}`;
 }
 
 function mkBTResult(

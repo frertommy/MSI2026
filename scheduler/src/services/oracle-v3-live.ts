@@ -11,10 +11,10 @@
  *   K          = ORACLE_V3_K (30)
  *
  * During a live match:
- *   published_index = B + M_locked + L
+ *   published_index = 0.6 × (B + L) + 0.4 × R_market_frozen
  *
  * At full time:
- *   L resets to 0, B updates via settlement, M_locked clears.
+ *   L resets to 0, B updates via settlement, M_locked & R_market_frozen clear.
  *
  * Constraints:
  *   - Only reads post-kickoff snapshots (snapshot_time > commence_time)

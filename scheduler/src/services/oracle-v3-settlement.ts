@@ -23,6 +23,7 @@
 
 import { getSupabase } from "../api/supabase-client.js";
 import { ORACLE_V3_K, ORACLE_V3_GRAVITY_GAMMA, ORACLE_V3_ALPHA } from "../config.js";
+import { deriveSeason } from "../utils/derive-season.js";
 import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -325,6 +326,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       team: match.home_team, league: match.league, timestamp: now,
       b_value: Number(B_after_home.toFixed(4)),
       m1_value: Number(M1_carry_home.toFixed(4)),
+      l_value: 0,
       published_index: Number((B_after_home + M1_carry_home).toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "settlement_v3",
@@ -360,6 +362,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       team: match.away_team, league: match.league, timestamp: now,
       b_value: Number(B_after_away.toFixed(4)),
       m1_value: Number(M1_carry_away.toFixed(4)),
+      l_value: 0,
       published_index: Number((B_after_away + M1_carry_away).toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "settlement_v3",
@@ -423,11 +426,3 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-
-function deriveSeason(date: string): string {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  if (month >= 7) return `${year}-${(year + 1).toString().slice(2)}`;
-  return `${year - 1}-${year.toString().slice(2)}`;
-}
