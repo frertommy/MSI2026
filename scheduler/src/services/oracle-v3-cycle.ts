@@ -127,7 +127,7 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   // Retry once on failure (RISK-1) to recover from transient errors.
   let btResolves = 0;
 
-  for (const league of leaguesSettled) {
+  await Promise.all([...leaguesSettled].map(async (league) => {
     const triggerFixtureId = leagueSettleTriggers.get(league);
     let resolved = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -149,7 +149,7 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
     if (!resolved) {
       log.error(`Oracle V3 cycle: DEGRADED — BT ratings stale for ${league}. Will re-try on next settlement.`);
     }
-  }
+  }));
 
   if (btResolves > 0) {
     log.info(`Oracle V3 BT re-solve: ${btResolves}/${leaguesSettled.size} leagues`);
@@ -180,7 +180,10 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   let liveFrozen = 0;
 
   if (ORACLE_V3_LIVE_ENABLED && !liveErr && (liveMatches ?? []).length > 0) {
-    for (const m of (liveMatches ?? [])) {
+    const liveResults = await Promise.all((liveMatches ?? []).map(async (m) => {
+      let updated = 0;
+      let frozen = 0;
+
       // Freeze R_market at kickoff (first time only) + get state for live writes
       const frozenState = await handleKickoffFreezeV3(sb, m.fixture_id, m.home_team, m.away_team);
 
@@ -192,22 +195,28 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
             const teamState = frozenState.get(teamId as string);
             if (teamState) {
               await writeLiveStateV3(sb, teamId, m.fixture_id, result.L, teamState.b_value, teamState.r_market_frozen, teamState.m1_locked);
-              liveUpdated++;
+              updated++;
             } else {
               log.warn(`V3 cycle: no frozen state for ${teamId}, skipping live write`);
-              liveFrozen++;
+              frozen++;
             }
           } else {
-            liveFrozen++;
+            frozen++;
           }
         } catch (err) {
-          liveFrozen++;
+          frozen++;
           log.error(
             `Oracle V3 cycle: live layer failed for ${teamId}: ` +
             (err instanceof Error ? err.message : String(err))
           );
         }
       }
+      return { updated, frozen };
+    }));
+
+    for (const r of liveResults) {
+      liveUpdated += r.updated;
+      liveFrozen += r.frozen;
     }
 
     if (liveUpdated > 0 || liveFrozen > 0) {
@@ -220,20 +229,20 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   const leagues = Object.keys(LEAGUE_SPORT_KEYS);
   let rnextRefreshed = 0;
 
-  for (const league of leagues) {
-    // Skip leagues that just had a BT re-solve (already refreshed)
-    if (leaguesSettled.has(league)) continue;
-
+  const leaguesToRefresh = leagues.filter(l => !leaguesSettled.has(l));
+  const rnextResults = await Promise.all(leaguesToRefresh.map(async (league) => {
     try {
       const result = await refreshRNextForLeague(league);
-      if (result.updated) rnextRefreshed += result.teams_refreshed;
+      return result.updated ? result.teams_refreshed : 0;
     } catch (err) {
       log.error(
         `Oracle V3 cycle: R_next refresh failed for ${league}: ` +
         (err instanceof Error ? err.message : String(err))
       );
+      return 0;
     }
-  }
+  }));
+  rnextRefreshed = rnextResults.reduce((a, b) => a + b, 0);
 
   // ── Step 4: Log cycle summary ─────────────────────────────
   const elapsed = Date.now() - cycleStart;
