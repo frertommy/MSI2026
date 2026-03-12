@@ -203,13 +203,17 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
   // ── On-demand price history (lazy-loaded per team) ────────
   const [priceHistoryCache, setPriceHistoryCache] = useState<Map<string, PriceHistoryRow[]>>(new Map());
   const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
+  const [priceHistoryError, setPriceHistoryError] = useState<string | null>(null);
   const fetchingRef = useRef<string | null>(null);
+  const cacheRef = useRef(priceHistoryCache);
+  cacheRef.current = priceHistoryCache;
 
   const fetchPriceHistory = useCallback(async (team: string) => {
-    if (priceHistoryCache.has(team)) return;
+    if (cacheRef.current.has(team)) return;
     if (fetchingRef.current === team) return;
     fetchingRef.current = team;
     setPriceHistoryLoading(true);
+    setPriceHistoryError(null);
     try {
       const res = await fetch(`/api/v3/price-history?team=${encodeURIComponent(team)}`);
       if (res.ok) {
@@ -219,12 +223,16 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
           next.set(team, data);
           return next;
         });
+      } else {
+        setPriceHistoryError(`Failed to load chart data (${res.status})`);
       }
+    } catch {
+      setPriceHistoryError("Network error loading chart data");
     } finally {
       setPriceHistoryLoading(false);
       fetchingRef.current = null;
     }
-  }, [priceHistoryCache]);
+  }, []); // no dependency on priceHistoryCache — uses cacheRef instead
 
   useEffect(() => {
     if (selectedTeam) {
@@ -629,6 +637,33 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
             <span className="text-xs text-muted font-mono ml-auto animate-pulse">
               Loading chart data...
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* Error state */}
+      {selectedTeam && priceHistoryError && !priceHistoryLoading && !priceHistoryCache.has(selectedTeam) && (
+        <div className="border border-red-500/30 rounded-lg p-4 bg-red-950/20">
+          <div className="flex items-center gap-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+              style={{
+                backgroundColor:
+                  LEAGUE_DOT_COLOR[teamLeague.get(selectedTeam) ?? ""] ?? "#888",
+              }}
+            />
+            <span className="font-bold text-foreground text-sm">
+              {selectedTeam}
+            </span>
+            <span className="text-xs text-red-400 font-mono ml-auto">
+              {priceHistoryError}
+            </span>
+            <button
+              onClick={() => fetchPriceHistory(selectedTeam)}
+              className="text-xs text-cyan-400 hover:text-cyan-300 font-mono underline"
+            >
+              Retry
+            </button>
           </div>
         </div>
       )}

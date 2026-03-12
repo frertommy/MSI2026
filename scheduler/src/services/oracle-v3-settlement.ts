@@ -172,6 +172,18 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
   const E_KR_home = frozenKR.home_expected_score;
   const E_KR_away = frozenKR.away_expected_score;
 
+  // Sanity check: E_KR should be in [0.02, 0.98] — extreme values indicate bad odds data
+  if (E_KR_home < 0.02 || E_KR_home > 0.98 || E_KR_away < 0.02 || E_KR_away > 0.98) {
+    log.warn(
+      `V3 Settlement: E_KR out of sane bounds for fixture ${fixtureId} ` +
+      `(home=${E_KR_home.toFixed(4)}, away=${E_KR_away.toFixed(4)}) — skipping`
+    );
+    return {
+      settled: false, skipped_reason: "ekr_out_of_bounds",
+      league: match.league, home_team: match.home_team, away_team: match.away_team,
+    };
+  }
+
   // ── Step 4: Load current V3 state ─────────────────────────
   const { data: homeState } = await sb
     .from("team_oracle_v3_state")

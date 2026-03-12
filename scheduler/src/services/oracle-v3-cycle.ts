@@ -30,6 +30,12 @@ import { log } from "../logger.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
+interface FrozenTeamState {
+  b_value: number;
+  r_market_frozen: number;
+  m1_locked: number;
+}
+
 interface V3CycleResult {
   ran: boolean;
   skipped_reason?: string;
@@ -158,16 +164,22 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
 
   if (ORACLE_V3_LIVE_ENABLED && !liveErr && (liveMatches ?? []).length > 0) {
     for (const m of (liveMatches ?? [])) {
-      // Freeze R_market at kickoff (first time only)
-      await handleKickoffFreezeV3(sb, m.fixture_id, m.home_team, m.away_team);
+      // Freeze R_market at kickoff (first time only) + get state for live writes
+      const frozenState = await handleKickoffFreezeV3(sb, m.fixture_id, m.home_team, m.away_team);
 
       // Compute L for each team
       for (const [teamId, isHome] of [[m.home_team, true], [m.away_team, false]] as [string, boolean][]) {
         try {
           const result = await computeLiveLayerV3(m.fixture_id, teamId, isHome);
           if (!result.frozen) {
-            await writeLiveStateV3(sb, teamId, m.fixture_id, result.L);
-            liveUpdated++;
+            const teamState = frozenState.get(teamId as string);
+            if (teamState) {
+              await writeLiveStateV3(sb, teamId, m.fixture_id, result.L, teamState.b_value, teamState.r_market_frozen, teamState.m1_locked);
+              liveUpdated++;
+            } else {
+              log.warn(`V3 cycle: no frozen state for ${teamId}, skipping live write`);
+              liveFrozen++;
+            }
           } else {
             liveFrozen++;
           }
@@ -242,11 +254,16 @@ function mkResult(
   };
 }
 
-/** Fetch ALL finished matches (paginated). */
+/** Fetch recently-finished matches (last 7 days, paginated).
+ *  Matches unsettled for >7 days need manual investigation.
+ */
 async function fetchAllFinished(
   sb: ReturnType<typeof getSupabase>
 ): Promise<{ fixture_id: number }[] | null> {
   const all: { fixture_id: number }[] = [];
+  const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Use the later of ORACLE_V3_SETTLEMENT_START_DATE and 7-day cutoff
+  const effectiveFrom = recentCutoff > ORACLE_V3_SETTLEMENT_START_DATE ? recentCutoff : ORACLE_V3_SETTLEMENT_START_DATE;
   let from = 0;
   const pageSize = 1000;
   while (true) {
@@ -254,7 +271,7 @@ async function fetchAllFinished(
       .from("matches")
       .select("fixture_id")
       .eq("status", "finished")
-      .gte("date", ORACLE_V3_SETTLEMENT_START_DATE)
+      .gte("date", effectiveFrom)
       .order("date", { ascending: true })
       .range(from, from + pageSize - 1);
 
@@ -292,11 +309,14 @@ async function fetchV3SettlementEntries(
  * Freeze R_market at kickoff for teams going live.
  * Stores R_market (includes R_next) as gravity target for settlement.
  * Also locks M1 at current value.
+ * Returns a Map of team → { b_value, r_market_frozen, m1_locked } for use by writeLiveStateV3.
  */
 async function handleKickoffFreezeV3(
   sb: ReturnType<typeof getSupabase>,
   fixtureId: number, homeTeam: string, awayTeam: string
-): Promise<void> {
+): Promise<Map<string, FrozenTeamState>> {
+  const result = new Map<string, FrozenTeamState>();
+
   for (const teamId of [homeTeam, awayTeam]) {
     const { data: state, error: stateErr } = await sb
       .from("team_oracle_v3_state")
@@ -306,20 +326,24 @@ async function handleKickoffFreezeV3(
 
     if (stateErr || !state) continue;
 
+    const bValue = Number(state.b_value);
+
     // Only freeze once per match
     if (state.m1_locked === null || state.m1_locked === undefined) {
       const m1Raw = Number(state.m1_value);
       const m1Value = isNaN(m1Raw) ? 0 : m1Raw;
       const rMarketRaw = state.r_market != null ? Number(state.r_market) : NaN;
       const rMarketAtKickoff = isNaN(rMarketRaw)
-        ? (Number(state.b_value) + m1Value)
+        ? (bValue + m1Value)
         : rMarketRaw;
+
+      const frozenRMarket = Number(rMarketAtKickoff.toFixed(4));
 
       const { error: lockErr } = await sb
         .from("team_oracle_v3_state")
         .update({
           m1_locked: m1Value,
-          r_market_frozen: Number(rMarketAtKickoff.toFixed(4)),
+          r_market_frozen: frozenRMarket,
           updated_at: new Date().toISOString(),
         })
         .eq("team_id", teamId);
@@ -332,32 +356,29 @@ async function handleKickoffFreezeV3(
           `for ${teamId} (fixture ${fixtureId})`
         );
       }
+
+      result.set(teamId, { b_value: bValue, r_market_frozen: frozenRMarket, m1_locked: m1Value });
+    } else {
+      // Already frozen — return existing frozen values
+      const existingRFrozen = state.r_market_frozen != null ? Number(state.r_market_frozen) : bValue;
+      const existingM1 = Number(state.m1_locked);
+      result.set(teamId, { b_value: bValue, r_market_frozen: existingRFrozen, m1_locked: isNaN(existingM1) ? 0 : existingM1 });
     }
   }
+
+  return result;
 }
 
 /**
  * Write live state: published = 0.6 × (B + L) + 0.4 × R_market_frozen
  * L goes INSIDE the 0.6 bracket (spec Section 12.1).
+ * Accepts pre-fetched state from handleKickoffFreezeV3 to avoid redundant DB read.
  */
 async function writeLiveStateV3(
   sb: ReturnType<typeof getSupabase>,
-  teamId: string, fixtureId: number, L: number
+  teamId: string, fixtureId: number, L: number,
+  B: number, R_market_frozen: number, m1_locked: number
 ): Promise<void> {
-  const { data: state, error: stateErr } = await sb
-    .from("team_oracle_v3_state")
-    .select("b_value, r_market_frozen")
-    .eq("team_id", teamId)
-    .single();
-
-  if (stateErr || !state) {
-    log.error(`V3 writeLiveState: state not found for ${teamId}: ${stateErr?.message ?? "no data"}`);
-    return;
-  }
-
-  const B = Number(state.b_value);
-  const R_market_frozen = state.r_market_frozen != null ? Number(state.r_market_frozen) : B;
-
   // published = 0.6 × (B + L) + 0.4 × R_market_frozen
   const publishedIndex = 0.6 * (B + L) + 0.4 * R_market_frozen;
   const now = new Date().toISOString();
@@ -381,7 +402,7 @@ async function writeLiveStateV3(
     .from("oracle_price_history")
     .insert([{
       team: teamId, league: league ?? "unknown", timestamp: now,
-      b_value: B, m1_value: 0, l_value: Number(L.toFixed(4)),
+      b_value: B, m1_value: m1_locked, l_value: Number(L.toFixed(4)),
       published_index: Number(publishedIndex.toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "live_update_v3",
@@ -390,12 +411,19 @@ async function writeLiveStateV3(
   if (phErr) log.warn(`V3 writeLiveState: price history insert failed for ${teamId}: ${phErr.message}`);
 }
 
-/** In-memory cache for team → league mapping within a cycle. */
+/** In-memory cache for team → league mapping, cleared every hour. */
 const teamLeagueCache = new Map<string, string | null>();
+let teamLeagueCacheLastClear = 0;
+const TEAM_LEAGUE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 async function getTeamLeagueCached(
   sb: ReturnType<typeof getSupabase>, teamId: string
 ): Promise<string | null> {
+  const now = Date.now();
+  if (now - teamLeagueCacheLastClear > TEAM_LEAGUE_CACHE_TTL_MS) {
+    teamLeagueCache.clear();
+    teamLeagueCacheLastClear = now;
+  }
   if (teamLeagueCache.has(teamId)) return teamLeagueCache.get(teamId) ?? null;
   const { data } = await sb
     .from("matches")

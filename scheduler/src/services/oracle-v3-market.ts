@@ -521,11 +521,12 @@ async function loadNextFixturesForLeague(
 
   const fixtureOddsCache = new Map<number, FixtureES>();
   for (const fid of fixtureIdsNeeded) {
-    const dummyFix: WindowFixture = {
-      fixture_id: fid, date: "", home_team: "", away_team: "",
-      commence_time: null, status: "", league,
-    };
-    const es = await loadFixtureES(sb, dummyFix, "upcoming");
+    // Use actual fixture data so the fallback path (team-match lookup) works
+    const actualFix = upcoming.find(f => f.fixture_id === fid);
+    const fix: WindowFixture = actualFix
+      ? { fixture_id: fid, date: actualFix.date, home_team: actualFix.home_team, away_team: actualFix.away_team, commence_time: actualFix.commence_time, status: "scheduled", league }
+      : { fixture_id: fid, date: "", home_team: "", away_team: "", commence_time: null, status: "", league };
+    const es = await loadFixtureES(sb, fix, "upcoming");
     if (es) fixtureOddsCache.set(fid, es);
   }
 
