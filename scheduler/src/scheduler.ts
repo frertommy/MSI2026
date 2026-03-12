@@ -4,8 +4,6 @@ import {
   CREDITS_DAILY_SOFT_LIMIT,
   DAILY_CREDIT_SAFETY,
   POLYMARKET_POLL_INTERVAL,
-  ORACLE_V1_ENABLED,
-  ORACLE_V2_ENABLED,
   ORACLE_V3_ENABLED,
 } from "./config.js";
 import { log } from "./logger.js";
@@ -19,8 +17,6 @@ import {
 } from "./services/polymarket-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
 import { CreditTracker } from "./services/credit-tracker.js";
-import { runOracleV1Cycle } from "./services/oracle-v1-cycle.js";
-import { runOracleV2Cycle } from "./services/oracle-v2-cycle.js";
 import { runOracleV3Cycle } from "./services/oracle-v3-cycle.js";
 import { runWatchdog } from "./services/pipeline-watchdog.js";
 import { buildTeamLookup, type TeamLookup } from "./utils/team-names.js";
@@ -137,31 +133,7 @@ export class Scheduler {
       // 4. Write credit stats to Supabase for frontend dashboard
       await this.writeCreditStats();
 
-      // 5. Oracle V1 cycle — settle finished matches + refresh M1
-      if (ORACLE_V1_ENABLED) {
-        try {
-          await runOracleV1Cycle();
-        } catch (err) {
-          log.warn(
-            "Oracle V1 cycle failed",
-            err instanceof Error ? err.message : err
-          );
-        }
-      }
-
-      // 5b. Oracle V2 cycle — settle with gravity + refresh M1 (parallel to V1)
-      if (ORACLE_V2_ENABLED) {
-        try {
-          await runOracleV2Cycle();
-        } catch (err) {
-          log.warn(
-            "Oracle V2 cycle failed",
-            err instanceof Error ? err.message : err
-          );
-        }
-      }
-
-      // 5c. Oracle V3 cycle — BT market refresh + settle with γ=0.08
+      // 5. Oracle V3 cycle — BT market refresh + settle with γ=0.08
       if (ORACLE_V3_ENABLED) {
         try {
           await runOracleV3Cycle();

@@ -98,7 +98,7 @@ export const ORACLE_V1_BASELINE_ELO = 1500;  // Bootstrap B_value for new teams 
 export const ORACLE_V1_SETTLEMENT_START_DATE = "2025-08-01"; // Only settle matches from current odds-covered season
 
 // ─── Oracle V1 feature flags ──────────────────────────────────
-export const ORACLE_V1_ENABLED = true;                 // Oracle V1 always on
+export const ORACLE_V1_ENABLED = false;                // V1 retired — moved to legacy/
 export const ORACLE_V1_LIVE_ENABLED = true;            // Live layer during matches
 export const ORACLE_V1_FEEDBACK_ENABLED = false;       // Stub — no perp mark price yet
 export const ORACLE_V1_OFFSEASON_ENABLED = true;       // Polymarket futures → R_futures → M1 during offseason
@@ -118,7 +118,7 @@ export const ORACLE_V1_K_FRIENDLY = 10;                 // K=10 for friendlies (
 // ─── Oracle V2 constants ─────────────────────────────────────
 // V2 = perfect seeds + gravity-on-settlement (γ=0.05)
 // ΔB = K × (S − E_KR) + γ × (R_market − B)
-export const ORACLE_V2_ENABLED = true;
+export const ORACLE_V2_ENABLED = false;                // V2 retired — moved to legacy/
 export const ORACLE_V2_LIVE_ENABLED = true;       // Live layer during matches (L = K × (E_live − E_KR))
 export const ORACLE_V2_K = 30;
 export const ORACLE_V2_GRAVITY_GAMMA = 0.05;     // gravity pull toward market consensus at settlement

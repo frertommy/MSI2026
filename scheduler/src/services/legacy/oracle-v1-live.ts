@@ -26,7 +26,7 @@
 
 import { getSupabase } from "../api/supabase-client.js";
 import { powerDevigOdds, median } from "./odds-blend.js";
-import { freezeKR } from "./oracle-v1-settlement.js";
+import { freezeKR } from "./oracle-kr-freeze.js";
 import { ORACLE_V1_K } from "../config.js";
 import { log } from "../logger.js";
 

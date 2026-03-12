@@ -459,9 +459,16 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
         date = ph.timestamp.slice(0, 10);
       }
 
+      // Use actual timestamp for x-axis to prevent same-day points stacking vertically.
+      // Bootstrap & settlement keep their synthetic date (season start / match date).
+      const useSyntheticDate =
+        ph.publish_reason === "bootstrap_v3" || ph.publish_reason === "bootstrap" ||
+        ((ph.publish_reason === "settlement_v3" || ph.publish_reason === "settlement") && ph.source_fixture_id != null);
       const point: ChartPoint = {
         date,
-        dateTs: new Date(date + "T00:00:00Z").getTime(),
+        dateTs: useSyntheticDate
+          ? new Date(date + "T00:00:00Z").getTime()
+          : new Date(ph.timestamp).getTime(),
         rawTimestamp: ph.timestamp,
         published_index: Number(ph.published_index),
         B_value: Number(ph.B_value),
@@ -487,11 +494,7 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
       points.push(point);
     }
 
-    points.sort((a, b) => {
-      const cmp = a.date.localeCompare(b.date);
-      if (cmp !== 0) return cmp;
-      return a.rawTimestamp.localeCompare(b.rawTimestamp);
-    });
+    points.sort((a, b) => a.dateTs - b.dateTs);
 
     return points;
   }, [selectedTeam, priceHistoryCache, matchById, earliestMatchDate, settlementLookup]);

@@ -8,6 +8,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { OracleV3Client } from "./oracle-v3-client";
+import { StatusBar } from "./status-bar";
 
 // ─── Types (shared with client) ─────────────────────────────
 export interface TeamOracleRow {
@@ -152,8 +153,9 @@ export default async function OracleV3Page() {
     false
   );
 
-  // Only fetch recent matches (last 90 days + upcoming) to avoid loading entire season
-  const matchCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Fetch all season matches so settlement fixture_ids can resolve to match dates
+  // (settlements are backfilled with write-time timestamps, not match dates)
+  const matchCutoff = "2025-08-01";
   const matchesPromise = fetchAllWithGte<MatchRow>(
     "matches",
     "fixture_id, date, league, home_team, away_team, score, status, commence_time",
@@ -195,6 +197,7 @@ export default async function OracleV3Page() {
           </span>
         </div>
       </header>
+      <StatusBar />
       <main className="mx-auto max-w-7xl px-6 py-6">
         {teamCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">

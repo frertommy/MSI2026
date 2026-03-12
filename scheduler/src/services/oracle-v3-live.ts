@@ -21,12 +21,12 @@
  *   - Staleness: rejects bookmaker snapshots older than 3 minutes
  *   - Falls back to L=0 if fewer than 2 non-stale bookmakers
  *   - Uses power de-vig + median consensus
- *   - Reuses freezeKR from V1 settlement (oracle_kr_snapshots is shared)
+ *   - Uses freezeKR from shared oracle-kr-freeze utility (oracle_kr_snapshots is shared)
  */
 
 import { getSupabase } from "../api/supabase-client.js";
 import { powerDevigOdds, median } from "./odds-blend.js";
-import { freezeKR } from "./oracle-v1-settlement.js";
+import { freezeKR } from "./oracle-kr-freeze.js";
 import { ORACLE_V3_K } from "../config.js";
 import { log } from "../logger.js";
 

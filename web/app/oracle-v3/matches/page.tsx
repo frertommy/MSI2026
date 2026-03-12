@@ -1,8 +1,39 @@
 import { supabase, batchedIn } from "@/lib/supabase";
-import { MatchesListClient } from "../../matches/matches-list-client";
-import type { UpcomingMatch, BookmakerOdds, PolymarketOdds } from "../../matches/page";
+import { MatchesListClient } from "./matches-list-client";
 
 // ─── Types ───────────────────────────────────────────────────
+
+export interface BookmakerOdds {
+  home: number;
+  draw: number;
+  away: number;
+  count: number;
+}
+
+export interface PolymarketOdds {
+  homeYes: number;
+  drawYes: number;
+  awayYes: number;
+  volume: number;
+}
+
+export interface UpcomingMatch {
+  fixture_id: number;
+  date: string;
+  league: string;
+  home_team: string;
+  away_team: string;
+  home_index: number;
+  away_index: number;
+  home_price: number;
+  away_price: number;
+  bookmaker_home_prob: number | null;
+  bookmaker_draw_prob: number | null;
+  bookmaker_away_prob: number | null;
+  bookmaker_odds: BookmakerOdds | null;
+  polymarket: PolymarketOdds | null;
+}
+
 interface MatchRow {
   fixture_id: number;
   date: string;
