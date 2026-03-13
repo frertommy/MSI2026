@@ -1,4 +1,4 @@
-import { ODDS_API_KEY, LEAGUE_SPORT_KEYS, OUTRIGHT_SPORT_KEYS } from "../config.js";
+import { ODDS_API_KEY, LEAGUE_SPORT_KEYS } from "../config.js";
 import { log } from "../logger.js";
 import type { LiveOddsEvent } from "../types.js";
 
@@ -149,45 +149,3 @@ async function fetchOutrightOdds(sportKey: string): Promise<FetchResult> {
   };
 }
 
-/**
- * Fetch outright odds for all 5 leagues.
- * 1-second delay between calls. 5 credits total.
- */
-export async function fetchAllOutrights(): Promise<{
-  allEvents: { league: string; events: LiveOddsEvent[] }[];
-  totalCreditsUsed: number;
-  creditsRemaining: number | null;
-}> {
-  const allEvents: { league: string; events: LiveOddsEvent[] }[] = [];
-  let totalCreditsUsed = 0;
-  let creditsRemaining: number | null = null;
-
-  const leagues = Object.entries(OUTRIGHT_SPORT_KEYS);
-
-  for (let i = 0; i < leagues.length; i++) {
-    const [league, sportKey] = leagues[i];
-
-    try {
-      const result = await fetchOutrightOdds(sportKey);
-      allEvents.push({ league, events: result.events });
-      totalCreditsUsed += result.creditsUsed;
-      if (result.creditsRemaining !== null) {
-        creditsRemaining = result.creditsRemaining;
-      }
-    } catch (err) {
-      log.error(
-        `Failed to fetch ${league} outrights`,
-        err instanceof Error ? err.message : err
-      );
-      allEvents.push({ league, events: [] });
-      totalCreditsUsed += 1;
-    }
-
-    // Rate limit: 1s between calls (except last)
-    if (i < leagues.length - 1) {
-      await sleep(1000);
-    }
-  }
-
-  return { allEvents, totalCreditsUsed, creditsRemaining };
-}

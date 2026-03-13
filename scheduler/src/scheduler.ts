@@ -12,7 +12,6 @@ import { getSupabase } from "./api/supabase-client.js";
 import { pollOdds } from "./services/odds-poller.js";
 import {
   pollPolymarketMatches,
-  pollPolymarketFutures,
   matchPolymarketToFixtures,
 } from "./services/polymarket-poller.js";
 import { refreshMatches } from "./services/match-tracker.js";
@@ -33,7 +32,6 @@ export class Scheduler {
   private lastOutrightPoll = 0;
   private lastHourlyPoll = 0;
   private lastPolymarketPoll = 0;
-
   /** Commence times from latest poll (ISO strings) for interval calculation */
   private commenceTimes: string[] = [];
 
@@ -100,15 +98,10 @@ export class Scheduler {
         });
       }
 
-      // 2b. Outright / futures polling — DISABLED
-      // outright_odds table dropped; API endpoints return 404.
-      // Will be replaced by Polymarket futures integration.
-
-      // 2c. Poll Polymarket (every 10 min — free, no credits, no auth)
+      // 2b. Poll Polymarket match odds (every 10 min — free, no credits)
       if (Date.now() - this.lastPolymarketPoll >= POLYMARKET_POLL_INTERVAL) {
         try {
           await pollPolymarketMatches();
-          await pollPolymarketFutures();
           if (this.lookup) {
             await matchPolymarketToFixtures(this.lookup);
           }
@@ -121,7 +114,7 @@ export class Scheduler {
         }
       }
 
-      // 3. Refresh match scores (every cycle — 1 min)
+      // 3. Refresh match scores (every cycle — 30s)
       // Needed for timely status='finished' detection so settlement + L reset aren't delayed.
       // Pro plan: 7,500 calls/day, this uses ~7,200 (5 leagues × 1,440 cycles).
       const matchRefreshResult = await refreshMatches();

@@ -1,11 +1,11 @@
-import { fetchAllLeagueOdds, fetchAllOutrights } from "../api/odds-client.js";
+import { fetchAllLeagueOdds } from "../api/odds-client.js";
 import { upsertBatched, getSupabase } from "../api/supabase-client.js";
 import {
   matchEventToFixture,
   resolveOddsApiName,
   type TeamLookup,
 } from "../utils/team-names.js";
-import { LEAGUE_SPORT_KEYS, OUTRIGHT_SPORT_KEYS } from "../config.js";
+import { LEAGUE_SPORT_KEYS } from "../config.js";
 import { log } from "../logger.js";
 import type { PollResult, LiveOddsEvent } from "../types.js";
 import { CreditTracker } from "./credit-tracker.js";
@@ -372,79 +372,3 @@ export async function pollOdds(
   return result;
 }
 
-/**
- * Poll outright (league winner) odds for all leagues.
- * Resolves team names via resolveOddsApiName() and upserts to outright_odds table.
- */
-export async function pollOutrights(
-  lookup: TeamLookup,
-  creditTracker: CreditTracker
-): Promise<{ rowsUpserted: number; creditsUsed: number }> {
-  log.info("Starting outright poll...");
-
-  const { allEvents, totalCreditsUsed, creditsRemaining } =
-    await fetchAllOutrights();
-
-  creditTracker.recordUsage(totalCreditsUsed, creditsRemaining);
-
-  const rows: Record<string, unknown>[] = [];
-  const now = new Date().toISOString();
-  let unresolvedCount = 0;
-
-  for (const { league, events } of allEvents) {
-    for (const event of events) {
-      for (const bk of event.bookmakers) {
-        for (const market of bk.markets) {
-          if (market.key !== "outrights") continue;
-
-          for (const outcome of market.outcomes) {
-            const resolved = resolveOddsApiName(outcome.name);
-            if (resolved === outcome.name) {
-              // Name wasn't in alias map — log for debugging but still store
-              unresolvedCount++;
-              log.debug(
-                `Outright: unresolved team "${outcome.name}" in ${league}`
-              );
-            }
-
-            rows.push({
-              league,
-              team: resolved,
-              bookmaker: bk.key,
-              outright_odds: outcome.price,
-              implied_prob: 1 / outcome.price,
-              snapshot_time: now,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  let rowsUpserted = 0;
-  if (rows.length > 0) {
-    try {
-      const { inserted, failed } = await upsertBatched(
-        "outright_odds",
-        rows,
-        "league,team,bookmaker,snapshot_time"
-      );
-      rowsUpserted = inserted;
-      if (failed > 0) {
-        log.warn(`${failed} outright rows failed to upsert`);
-      }
-    } catch (err) {
-      log.warn(
-        "Outright upsert failed (table may not exist)",
-        err instanceof Error ? err.message : err
-      );
-    }
-  }
-
-  log.info(
-    `Outright poll complete: ${rows.length} rows (${rowsUpserted} upserted), ` +
-      `${unresolvedCount} unresolved names, ${totalCreditsUsed} credits used`
-  );
-
-  return { rowsUpserted, creditsUsed: totalCreditsUsed };
-}
