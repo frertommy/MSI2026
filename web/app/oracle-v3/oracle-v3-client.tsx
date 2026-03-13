@@ -451,7 +451,7 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
       if ((ph.publish_reason === "settlement_v3" || ph.publish_reason === "settlement") && ph.source_fixture_id != null) {
         const match = matchById.get(ph.source_fixture_id);
         date = match ? match.date.slice(0, 10) : ph.timestamp.slice(0, 10);
-      } else if (ph.publish_reason === "market_refresh_v3" || ph.publish_reason === "market_refresh" || ph.publish_reason === "live_update") {
+      } else if (ph.publish_reason === "market_refresh_v3" || ph.publish_reason === "market_refresh" || ph.publish_reason === "live_update" || ph.publish_reason === "live_update_v3") {
         date = ph.timestamp.slice(0, 10);
       } else if (ph.publish_reason === "bootstrap_v3" || ph.publish_reason === "bootstrap") {
         date = earliestMatchDate.get(team)?.slice(0, 10) ?? SEASON_START;
@@ -820,8 +820,8 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
                         )}
                         {!pt.result && (
                           <div className="text-muted text-[10px]">
-                            {pt.publish_reason.replace("_v3", "") === "market_refresh" || pt.publish_reason === "live_update"
-                              ? "M1 update"
+                            {pt.publish_reason.replace("_v3", "") === "market_refresh" || pt.publish_reason.includes("live_update")
+                              ? pt.publish_reason.includes("live_update") ? "Live update" : "M1 update"
                               : pt.publish_reason.replace("_v3", "")}
                           </div>
                         )}
