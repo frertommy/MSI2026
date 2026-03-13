@@ -68,7 +68,7 @@ export const OUTRIGHT_SPORT_KEYS: Record<string, string> = {
 export const OUTRIGHT_POLL_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 // ─── Primary polling interval ────────────────────────────────
-export const PRIMARY_POLL_INTERVAL = 60 * 1000;      // 1 minute — all leagues, all markets, 24/7
+export const PRIMARY_POLL_INTERVAL = 30 * 1000;      // 30 seconds — all leagues, all markets, 24/7
 export const HOURLY_POLL_INTERVAL = 60 * 60 * 1000;  // legacy — only used by sub-pollers (Polymarket etc.)
 export const DAILY_CREDIT_SAFETY = 220_000;           // fallback to 5-min if exceeded
 
