@@ -793,6 +793,7 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
                   content={({ active, payload }) => {
                     if (!active || !payload || payload.length === 0) return null;
                     const pt = payload[0].payload as ChartPoint;
+                    if (pt.publish_reason === "_anchor") return null;
                     const displayVal =
                       yAxisMode === "price"
                         ? `$${indexToPrice(pt.published_index).toFixed(2)}`

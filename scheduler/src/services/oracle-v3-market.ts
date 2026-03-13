@@ -165,7 +165,7 @@ export async function solveBTForLeague(
     .from("matches")
     .select("fixture_id, date, home_team, away_team, commence_time, status, league")
     .eq("league", league)
-    .in("status", ["scheduled", "not_started", "tbd"])
+    .in("status", ["upcoming", "scheduled", "not_started", "tbd"])
     .gte("date", today)
     .lte("date", forwardEnd)
     .order("date", { ascending: true })
@@ -520,7 +520,7 @@ async function loadNextFixturesForLeague(
     .from("matches")
     .select("fixture_id, date, home_team, away_team, commence_time")
     .eq("league", league)
-    .in("status", ["scheduled", "not_started", "tbd"])
+    .in("status", ["upcoming", "scheduled", "not_started", "tbd"])
     .gte("date", today)
     .order("date", { ascending: true })
     .limit(100);
