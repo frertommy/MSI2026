@@ -519,16 +519,36 @@ export function OracleV3Client({ teamStates, settlements, matches }: Props) {
       (p) => p.date >= cutoffStr && !p.publish_reason.includes("bootstrap")
     );
 
+    // Pad with invisible anchor points so x-axis always spans the full timeframe window.
+    // These use published_index=NaN so the line won't draw through them but they set the axis range.
+    const cutoffTs = cutoff.getTime();
+    const nowTs = Date.now();
+
     if (filtered.length === 0 && selectedData.length > 0) {
       const lastPoint = selectedData[selectedData.length - 1];
-      const todayStr = new Date().toISOString().slice(0, 10);
       return [
-        { ...lastPoint, date: cutoffStr, dateTs: new Date(cutoffStr + "T00:00:00Z").getTime() },
-        { ...lastPoint, date: todayStr, dateTs: new Date(todayStr + "T00:00:00Z").getTime() },
+        { ...lastPoint, date: cutoffStr, dateTs: cutoffTs },
+        { ...lastPoint, date: new Date().toISOString().slice(0, 10), dateTs: nowTs },
       ];
     }
 
-    return filtered;
+    // Ensure data spans from cutoff to now by adding boundary anchors
+    const result = [...filtered];
+    const anchorBase: ChartPoint = {
+      date: cutoffStr, dateTs: cutoffTs, rawTimestamp: "",
+      published_index: filtered[0]?.published_index ?? 0,
+      B_value: 0, M1_value: 0, publish_reason: "_anchor",
+    };
+
+    if (result[0].dateTs > cutoffTs) {
+      result.unshift({ ...anchorBase, date: cutoffStr, dateTs: cutoffTs, published_index: filtered[0].published_index });
+    }
+    if (result[result.length - 1].dateTs < nowTs - 3600000) {
+      const last = filtered[filtered.length - 1];
+      result.push({ ...anchorBase, date: new Date().toISOString().slice(0, 10), dateTs: nowTs, published_index: last.published_index });
+    }
+
+    return result;
   }, [selectedData, timeframe]);
 
   // ── Match reference lines for non-SEASON timeframes ──────
