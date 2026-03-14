@@ -30,6 +30,27 @@ export function Nav() {
           >
             Diagnostics
           </a>
+
+          <span className="text-border text-xs select-none">│</span>
+
+          <a
+            href="/vglobal"
+            className="text-xs transition-colors font-mono uppercase tracking-wider text-muted hover:text-amber-400"
+          >
+            vGlobal
+          </a>
+          <a
+            href="/vglobal/matches"
+            className="text-xs transition-colors font-mono uppercase tracking-wider text-muted hover:text-amber-400"
+          >
+            CL Matches
+          </a>
+          <a
+            href="/vglobal/diagnostics"
+            className="text-xs transition-colors font-mono uppercase tracking-wider text-muted hover:text-amber-400"
+          >
+            CL Diagnostics
+          </a>
         </div>
       </div>
     </nav>

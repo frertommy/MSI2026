@@ -25,6 +25,7 @@ import {
   ORACLE_V3_LIVE_ENABLED,
   ORACLE_V3_SETTLEMENT_START_DATE,
   LEAGUE_SPORT_KEYS,
+  DOMESTIC_LEAGUES,
 } from "../config.js";
 import { log } from "../logger.js";
 
@@ -48,6 +49,12 @@ interface V3CycleResult {
   live_frozen: number;
   elapsed_ms: number;
 }
+
+// ─── Cache: CL fixtures where neither team has V3 state ─────
+// These are retried once per cycle otherwise (5 DB queries each, no-op).
+// Cache is cleared after 24h so new teams can be picked up if state is added.
+const skippedUntrackedCL = new Map<number, number>(); // fixture_id → timestamp
+const SKIP_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // ─── Main cycle ─────────────────────────────────────────────
 
@@ -75,6 +82,8 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   }
 
   const finishedIds = finishedMatches.map(m => m.fixture_id);
+  const leagueByFixture = new Map<number, string>();
+  for (const m of finishedMatches) leagueByFixture.set(m.fixture_id, m.league);
   let unsettledFixtures: number[] = [];
 
   if (finishedIds.length > 0) {
@@ -85,7 +94,16 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
       for (const row of settledRows) {
         countByFixture.set(row.fixture_id, (countByFixture.get(row.fixture_id) ?? 0) + 1);
       }
-      unsettledFixtures = finishedIds.filter(fid => (countByFixture.get(fid) ?? 0) < 2);
+      // CL fixtures may only need 1 settlement (external opponent has no V3 state).
+      // Domestic fixtures need 2. Use league to determine expected count.
+      unsettledFixtures = finishedIds.filter(fid => {
+        const count = countByFixture.get(fid) ?? 0;
+        const league = leagueByFixture.get(fid) ?? "";
+        const isCL = !DOMESTIC_LEAGUES.has(league);
+        // CL: need at least 1 settlement (our tracked team). Domestic: need 2.
+        const expectedMin = isCL ? 1 : 2;
+        return count < expectedMin;
+      });
       unsettledFixtures.sort((a, b) => a - b);
     }
   }
@@ -95,8 +113,17 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   const leaguesSettled = new Set<string>();
   const leagueSettleTriggers = new Map<string, number>(); // league → latest settled fixture ID
 
+  // Evict expired entries from skip cache
+  const now = Date.now();
+  for (const [fid, ts] of skippedUntrackedCL) {
+    if (now - ts > SKIP_CACHE_TTL_MS) skippedUntrackedCL.delete(fid);
+  }
+
   // Settle sequentially to avoid B_value race conditions
   for (const fixtureId of unsettledFixtures) {
+    // Skip CL fixtures where neither team has V3 state (cached from prior cycles)
+    if (skippedUntrackedCL.has(fixtureId)) continue;
+
     try {
       const result = await settleFixtureV3(fixtureId);
       if (result.settled) {
@@ -105,6 +132,9 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
           leaguesSettled.add(result.league);
           leagueSettleTriggers.set(result.league, fixtureId);
         }
+      } else if (result.skipped_reason === "missing_v3_state") {
+        // Neither team has V3 state — cache to avoid retrying every cycle
+        skippedUntrackedCL.set(fixtureId, Date.now());
       }
     } catch (err) {
       settledErrors++;
@@ -124,10 +154,12 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
 
   // ── Step 1b: BT re-solve for leagues that had settlements ──
   // This is the ONLY time BT re-solves. Not on a timer. Not every cycle.
+  // CL excluded: BT stays league-only to avoid cross-contamination.
   // Retry once on failure (RISK-1) to recover from transient errors.
   let btResolves = 0;
+  const domesticLeaguesSettled = [...leaguesSettled].filter(l => DOMESTIC_LEAGUES.has(l));
 
-  await Promise.all([...leaguesSettled].map(async (league) => {
+  await Promise.all(domesticLeaguesSettled.map(async (league) => {
     const triggerFixtureId = leagueSettleTriggers.get(league);
     let resolved = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -152,7 +184,8 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
   }));
 
   if (btResolves > 0) {
-    log.info(`Oracle V3 BT re-solve: ${btResolves}/${leaguesSettled.size} leagues`);
+    log.info(`Oracle V3 BT re-solve: ${btResolves}/${domesticLeaguesSettled.length} domestic leagues` +
+      (leaguesSettled.size > domesticLeaguesSettled.length ? ` (${leaguesSettled.size - domesticLeaguesSettled.length} CL skipped)` : ""));
   }
 
   // ── Step 2: Identify frozen teams (mid-match) ─────────────
@@ -226,10 +259,11 @@ export async function runOracleV3Cycle(): Promise<V3CycleResult> {
 
   // ── Step 3: R_next-only refresh for non-frozen teams ───────
   // No BT re-solve — only R_next updates from live odds
-  const leagues = Object.keys(LEAGUE_SPORT_KEYS);
+  // R_next is domestic-only: CL fixtures don't contribute to next-fixture pricing
+  const domesticLeagues = Object.keys(LEAGUE_SPORT_KEYS).filter(l => DOMESTIC_LEAGUES.has(l));
   let rnextRefreshed = 0;
 
-  const leaguesToRefresh = leagues.filter(l => !leaguesSettled.has(l));
+  const leaguesToRefresh = domesticLeagues.filter(l => !leaguesSettled.has(l));
   const rnextResults = await Promise.all(leaguesToRefresh.map(async (league) => {
     try {
       const result = await refreshRNextForLeague(league);
@@ -282,11 +316,12 @@ function mkResult(
 
 /** Fetch recently-finished matches (last 7 days, paginated).
  *  Matches unsettled for >7 days need manual investigation.
+ *  Returns fixture_id + league so CL vs domestic threshold can be applied.
  */
 async function fetchAllFinished(
   sb: ReturnType<typeof getSupabase>
-): Promise<{ fixture_id: number }[] | null> {
-  const all: { fixture_id: number }[] = [];
+): Promise<{ fixture_id: number; league: string }[] | null> {
+  const all: { fixture_id: number; league: string }[] = [];
   const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   // Use the later of ORACLE_V3_SETTLEMENT_START_DATE and 7-day cutoff
   const effectiveFrom = recentCutoff > ORACLE_V3_SETTLEMENT_START_DATE ? recentCutoff : ORACLE_V3_SETTLEMENT_START_DATE;
@@ -295,7 +330,7 @@ async function fetchAllFinished(
   while (true) {
     const { data, error } = await sb
       .from("matches")
-      .select("fixture_id")
+      .select("fixture_id, league")
       .eq("status", "finished")
       .gte("date", effectiveFrom)
       .order("date", { ascending: true })
@@ -427,6 +462,7 @@ async function writeLiveStateV3(
   }
 
   const league = await getTeamLeagueCached(sb, teamId);
+  const liveCompetition = (league && DOMESTIC_LEAGUES.has(league)) ? "league" : "champions_league";
   const { error: phErr } = await sb
     .from("oracle_price_history")
     .insert([{
@@ -435,6 +471,7 @@ async function writeLiveStateV3(
       published_index: Number(publishedIndex.toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "live_update_v3",
+      competition: liveCompetition,
     }]);
 
   if (phErr) log.warn(`V3 writeLiveState: price history insert failed for ${teamId}: ${phErr.message}`);

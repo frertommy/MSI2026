@@ -22,7 +22,7 @@
  */
 
 import { getSupabase } from "../api/supabase-client.js";
-import { ORACLE_V3_K, ORACLE_V3_GRAVITY_GAMMA, ORACLE_V3_ALPHA } from "../config.js";
+import { ORACLE_V3_K, ORACLE_V3_GRAVITY_GAMMA, ORACLE_V3_CL_GRAVITY_GAMMA, ORACLE_V3_ALPHA, DOMESTIC_LEAGUES } from "../config.js";
 import { deriveSeason } from "../utils/derive-season.js";
 import { log } from "../logger.js";
 
@@ -118,6 +118,9 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
   }
 
   const match = matchData as MatchRow;
+  const isCL = match.league === "Champions League";
+  const gamma = isCL ? ORACLE_V3_CL_GRAVITY_GAMMA : ORACLE_V3_GRAVITY_GAMMA;
+  const competition = isCL ? "champions_league" : "league";
 
   if (match.status !== "finished") {
     throw new Error(`Match ${fixtureId} (${match.home_team} vs ${match.away_team}) not finished — status="${match.status}"`);
@@ -130,8 +133,12 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
 
   const [scoreHome, scoreAway] = scoreParsed;
 
-  // Both already settled?
-  if (alreadySettled.has(match.home_team) && alreadySettled.has(match.away_team)) {
+  // All settleable teams already settled?
+  // For CL: only teams with V3 state are settleable (external opponents skipped).
+  // For domestic: both teams must have state (checked later).
+  const homeSettleable = !alreadySettled.has(match.home_team);
+  const awaySettleable = !alreadySettled.has(match.away_team);
+  if (!homeSettleable && !awaySettleable) {
     return { settled: false, skipped_reason: "already_settled", league: match.league, home_team: match.home_team, away_team: match.away_team };
   }
 
@@ -198,27 +205,43 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
     .eq("team_id", match.away_team)
     .single();
 
-  if (!homeState || !awayState) {
+  // For CL: allow one-sided settlement (external opponents won't have V3 state).
+  // For domestic: both teams MUST exist (data corruption otherwise).
+  if (!homeState && !awayState) {
+    log.warn(`V3 Settlement: neither team has V3 state for fixture ${fixtureId} — skipping`);
+    return { settled: false, skipped_reason: "missing_v3_state", league: match.league, home_team: match.home_team, away_team: match.away_team };
+  }
+  if (!isCL && (!homeState || !awayState)) {
     log.warn(`V3 Settlement: missing V3 state for ${!homeState ? match.home_team : match.away_team} — run reseed first. Skipping fixture ${fixtureId}`);
     return { settled: false, skipped_reason: "missing_v3_state", league: match.league, home_team: match.home_team, away_team: match.away_team };
   }
+  // CL with one side missing: log which opponent is external and continue
+  if (isCL && (!homeState || !awayState)) {
+    const ext = !homeState ? match.home_team : match.away_team;
+    log.info(`V3 Settlement [CL]: external opponent "${ext}" has no V3 state — settling tracked team only`);
+  }
 
-  const B_before_home = Number(homeState.b_value);
-  const B_before_away = Number(awayState.b_value);
-  const M1_carry_home = Number(homeState.m1_value);
-  const M1_carry_away = Number(awayState.m1_value);
+  const B_before_home = homeState ? Number(homeState.b_value) : 0;
+  const B_before_away = awayState ? Number(awayState.b_value) : 0;
+  const M1_carry_home = homeState ? Number(homeState.m1_value) : 0;
+  const M1_carry_away = awayState ? Number(awayState.m1_value) : 0;
 
   // ── Step 5: Gravity using R_market_frozen ──────────────────
   // r_market_frozen = R_market at kickoff (includes R_next). Fallback to current r_market, then B.
-  const R_mkt_frozen_home = homeState.r_market_frozen != null ? Number(homeState.r_market_frozen)
-    : (homeState.r_market != null ? Number(homeState.r_market) : B_before_home);
-  const R_mkt_frozen_away = awayState.r_market_frozen != null ? Number(awayState.r_market_frozen)
-    : (awayState.r_market != null ? Number(awayState.r_market) : B_before_away);
+  const R_mkt_frozen_home = homeState
+    ? (homeState.r_market_frozen != null ? Number(homeState.r_market_frozen)
+      : (homeState.r_market != null ? Number(homeState.r_market) : B_before_home))
+    : 0;
+  const R_mkt_frozen_away = awayState
+    ? (awayState.r_market_frozen != null ? Number(awayState.r_market_frozen)
+      : (awayState.r_market != null ? Number(awayState.r_market) : B_before_away))
+    : 0;
 
   // ── Step 6: Compute ΔB with cause-effect clamp ─────────────
+  // CL uses γ=0 (no gravity) to avoid cross-contamination from league-derived R_market
   const computeDeltaB = (S: number, E_KR: number, B: number, R_mkt_frozen: number) => {
     const delta_result = ORACLE_V3_K * (S - E_KR);
-    const delta_gravity = ORACLE_V3_GRAVITY_GAMMA * (R_mkt_frozen - B);
+    const delta_gravity = gamma * (R_mkt_frozen - B);
     const delta_raw = delta_result + delta_gravity;
 
     // Cause-effect clamp: win → ΔB ≥ 0, loss → ΔB ≤ 0
@@ -252,8 +275,9 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
   const tracePayload = {
     oracle_version: "v3",
     K: ORACLE_V3_K,
-    gamma: ORACLE_V3_GRAVITY_GAMMA,
+    gamma,
     alpha: ORACLE_V3_ALPHA,
+    competition,
     score: match.score,
     score_home: scoreHome,
     score_away: scoreAway,
@@ -297,7 +321,8 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
   const stateUpserts: Record<string, unknown>[] = [];
   const priceHistoryRows: Record<string, unknown>[] = [];
 
-  if (!alreadySettled.has(match.home_team)) {
+  // Only settle teams that have V3 state (CL external opponents are skipped)
+  if (homeState && !alreadySettled.has(match.home_team)) {
     logRows.push({
       fixture_id: fixtureId, team_id: match.home_team,
       e_kr: Number(E_KR_home.toFixed(6)), actual_score_s: S_home,
@@ -306,6 +331,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       b_after: Number(B_after_home.toFixed(6)),
       oracle_version: "v3",
       gravity_component: Number(home.delta_gravity.toFixed(6)),
+      competition,
       trace_payload: { ...tracePayload, perspective: "home" },
     });
     stateUpserts.push({
@@ -317,7 +343,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       m1_locked: null,
       r_market_frozen: null,
       published_index: Number((B_after_home + M1_carry_home).toFixed(4)),
-      confidence_score: 0,
+      // confidence_score intentionally omitted — BT re-solve recomputes it
       last_kr_fixture_id: fixtureId,
       last_settlement_ts: now,
       updated_at: now,
@@ -330,10 +356,11 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       published_index: Number((B_after_home + M1_carry_home).toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "settlement_v3",
+      competition,
     });
   }
 
-  if (!alreadySettled.has(match.away_team)) {
+  if (awayState && !alreadySettled.has(match.away_team)) {
     logRows.push({
       fixture_id: fixtureId, team_id: match.away_team,
       e_kr: Number(E_KR_away.toFixed(6)), actual_score_s: S_away,
@@ -342,6 +369,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       b_after: Number(B_after_away.toFixed(6)),
       oracle_version: "v3",
       gravity_component: Number(away.delta_gravity.toFixed(6)),
+      competition,
       trace_payload: { ...tracePayload, perspective: "away" },
     });
     stateUpserts.push({
@@ -353,7 +381,7 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       m1_locked: null,
       r_market_frozen: null,
       published_index: Number((B_after_away + M1_carry_away).toFixed(4)),
-      confidence_score: 0,
+      // confidence_score intentionally omitted — BT re-solve recomputes it
       last_kr_fixture_id: fixtureId,
       last_settlement_ts: now,
       updated_at: now,
@@ -366,7 +394,14 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
       published_index: Number((B_after_away + M1_carry_away).toFixed(4)),
       confidence_score: null, source_fixture_id: fixtureId,
       publish_reason: "settlement_v3",
+      competition,
     });
+  }
+
+  // Nothing to write? All settleable teams already settled or have no state (CL external opponents).
+  if (logRows.length === 0) {
+    log.debug(`V3 Settlement: fixture ${fixtureId} — no teams to settle (already done or no state)`);
+    return { settled: false, skipped_reason: "already_settled", league: match.league, home_team: match.home_team, away_team: match.away_team };
   }
 
   // Write settlement_log first (idempotency gate — if this succeeds, we MUST complete state writes)
@@ -381,19 +416,24 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
     }
   }
 
-  // Upsert team_oracle_v3_state — retry up to 3 times on failure since log is already written
+  // Update team_oracle_v3_state — use .update() NOT .upsert() to preserve columns
+  // we don't touch (confidence_score, bt_std_error, r_network, etc.).
+  // .upsert() replaces the entire row, zeroing out BT-computed fields.
+  // Retry up to 3 times on failure since log is already written.
   for (const row of stateUpserts) {
     let stateWritten = false;
+    const { team_id, season, ...updateFields } = row as Record<string, unknown>;
     for (let attempt = 1; attempt <= 3; attempt++) {
       const { error: stateErr } = await sb
         .from("team_oracle_v3_state")
-        .upsert([row], { onConflict: "team_id" });
+        .update(updateFields)
+        .eq("team_id", team_id as string);
       if (!stateErr) { stateWritten = true; break; }
-      log.warn(`V3 Settlement: state upsert attempt ${attempt}/3 failed for ${row.team_id}: ${stateErr.message}`);
+      log.warn(`V3 Settlement: state update attempt ${attempt}/3 failed for ${team_id}: ${stateErr.message}`);
       if (attempt < 3) await new Promise(r => setTimeout(r, 500 * attempt));
     }
     if (!stateWritten) {
-      log.error(`V3 Settlement: CRITICAL — settlement_log written but state upsert failed for ${row.team_id} fixture ${fixtureId}. B may be stale. Manual intervention needed.`);
+      log.error(`V3 Settlement: CRITICAL — settlement_log written but state update failed for ${team_id} fixture ${fixtureId}. B may be stale. Manual intervention needed.`);
     }
   }
 
@@ -404,11 +444,11 @@ export async function settleFixtureV3(fixtureId: number): Promise<V3SettlementRe
   }
 
   log.info(
-    `V3 Settlement: ${match.home_team} (ΔB=${home.delta_final > 0 ? "+" : ""}${home.delta_final.toFixed(2)}` +
+    `V3 Settlement${isCL ? " [CL]" : ""}: ${match.home_team} (ΔB=${home.delta_final > 0 ? "+" : ""}${home.delta_final.toFixed(2)}` +
     `${home.clamp_applied ? " CLAMPED" : ""}, grav=${home.delta_gravity > 0 ? "+" : ""}${home.delta_gravity.toFixed(2)}) ` +
     `vs ${match.away_team} (ΔB=${away.delta_final > 0 ? "+" : ""}${away.delta_final.toFixed(2)}` +
     `${away.clamp_applied ? " CLAMPED" : ""}, grav=${away.delta_gravity > 0 ? "+" : ""}${away.delta_gravity.toFixed(2)}) ` +
-    `[${match.score}, ${frozenKR.bookmaker_count} books, E_KR=${E_KR_home.toFixed(3)}/${E_KR_away.toFixed(3)}]`
+    `[${match.score}, ${frozenKR.bookmaker_count} books, E_KR=${E_KR_home.toFixed(3)}/${E_KR_away.toFixed(3)}, γ=${gamma}]`
   );
 
   return {

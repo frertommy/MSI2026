@@ -25,7 +25,6 @@
 import { getSupabase } from "../api/supabase-client.js";
 import { powerDevigOdds, median } from "./odds-blend.js";
 import { solveBT, type BTFixture, type BTSolveResult } from "./bradley-terry.js";
-import { deriveSeason } from "../utils/derive-season.js";
 import {
   ORACLE_V3_BT_SIGMA_PRIOR,
   ORACLE_V3_BT_HOME_ADV,
@@ -242,7 +241,7 @@ export async function solveBTForLeague(
 
   const { data: stateRows, error: stateErr } = await sb
     .from("team_oracle_v3_state")
-    .select("team_id, b_value")
+    .select("team_id, b_value, r_market_frozen, m1_locked")
     .in("team_id", teamIds);
 
   if (stateErr) {
@@ -251,7 +250,12 @@ export async function solveBTForLeague(
   }
 
   const priorMeans = new Map<string, number>();
-  for (const row of (stateRows ?? [])) priorMeans.set(row.team_id, Number(row.b_value));
+  const frozenTeams = new Set<string>();
+  for (const row of (stateRows ?? [])) {
+    priorMeans.set(row.team_id, Number(row.b_value));
+    // Teams with m1_locked or r_market_frozen are in a live match — don't overwrite their published_index
+    if (row.m1_locked != null || row.r_market_frozen != null) frozenTeams.add(row.team_id);
+  }
   for (const t of teamIds) { if (!priorMeans.has(t)) priorMeans.set(t, 1500); }
 
   // ── Step 6: Run BT solver ─────────────────────────────────
@@ -309,27 +313,41 @@ export async function solveBTForLeague(
       confidence_score: Number(conf.toFixed(4)),
       source_fixture_id: triggerFixtureId ?? null,
       publish_reason: "market_refresh_v3",
+      competition: "league", // BT solve is domestic-only (CL filtered in cycle)
     });
     teamsUpdated++;
   }
 
-  // Batch write state updates — use upsert directly to handle missing rows
+  // Batch write state updates — use .update() NOT .upsert() to preserve
+  // columns we don't touch (b_value, l_value, r_market_frozen, m1_locked).
+  // .upsert() replaces the entire row, zeroing out settlement-computed fields.
+  // b_value is NEVER written by BT — only settlement modifies B.
+  // published_index is skipped for frozen (live) teams to avoid overwriting
+  // the live-layer formula: published = 0.6×(B+L) + 0.4×R_market_frozen.
   for (const row of stateUpserts) {
-    const { error: upsertErr } = await sb
-      .from("team_oracle_v3_state")
-      .upsert([{
-        team_id: row.team_id,
-        season: deriveSeason(new Date().toISOString()),
-        league: row.league,
-        r_network: row.r_network, r_next: row.r_next, r_market: row.r_market,
-        m1_value: row.m1_value, published_index: row.published_index,
-        confidence_score: row.confidence_score, bt_std_error: row.bt_std_error,
-        next_fixture_id: row.next_fixture_id, last_bt_solve_ts: row.last_bt_solve_ts,
-        last_market_refresh_ts: row.last_market_refresh_ts, updated_at: row.updated_at,
-        b_value: priorMeans.get(row.team_id as string) ?? 1500,
-      }], { onConflict: "team_id" });
+    const teamId = row.team_id as string;
 
-    if (upsertErr) log.error(`V3 BT: state upsert failed for ${row.team_id}: ${upsertErr.message}`);
+    // Check if team is currently frozen (in live match) — skip published_index
+    const isFrozen = frozenTeams?.has(teamId) ?? false;
+
+    const updatePayload: Record<string, unknown> = {
+      r_network: row.r_network, r_next: row.r_next, r_market: row.r_market,
+      m1_value: row.m1_value,
+      confidence_score: row.confidence_score, bt_std_error: row.bt_std_error,
+      next_fixture_id: row.next_fixture_id, last_bt_solve_ts: row.last_bt_solve_ts,
+      last_market_refresh_ts: row.last_market_refresh_ts, updated_at: row.updated_at,
+    };
+    // Only update published_index for non-frozen teams
+    if (!isFrozen) {
+      updatePayload.published_index = row.published_index;
+    }
+
+    const { error: updateErr } = await sb
+      .from("team_oracle_v3_state")
+      .update(updatePayload)
+      .eq("team_id", teamId);
+
+    if (updateErr) log.error(`V3 BT: state update failed for ${teamId}: ${updateErr.message}`);
   }
 
   // Write price history
@@ -471,6 +489,7 @@ export async function refreshRNextForLeague(league: string): Promise<MarketRefre
       published_index: Number(published_index.toFixed(4)),
       confidence_score: null, source_fixture_id: null,
       publish_reason: "market_refresh_v3",
+      competition: "league", // R_next refresh is domestic-only (CL filtered in cycle)
     });
     teamsRefreshed++;
   }

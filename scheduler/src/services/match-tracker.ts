@@ -1,5 +1,6 @@
-import { API_FOOTBALL_KEY, LEAGUE_IDS } from "../config.js";
+import { API_FOOTBALL_KEY, LEAGUE_IDS, DOMESTIC_LEAGUES } from "../config.js";
 import { upsertBatched, getSupabase } from "../api/supabase-client.js";
+import { resolveOddsApiName } from "../utils/team-names.js";
 import { log } from "../logger.js";
 
 interface ApiFixture {
@@ -12,6 +13,11 @@ interface ApiFixture {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// CL rate limiting: track last CL refresh to avoid exceeding API-Football daily limits
+// CL refreshes at 5-min cadence vs 30s for domestic leagues
+let lastCLRefreshTs = 0;
+const CL_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Fetch recent fixtures from API-Football for a single league.
@@ -67,6 +73,17 @@ export async function refreshMatches(): Promise<{
 
   for (let i = 0; i < leagues.length; i++) {
     const [leagueName, leagueId] = leagues[i];
+    const isDomestic = DOMESTIC_LEAGUES.has(leagueName);
+
+    // CL rate limiting: skip if refreshed too recently (5-min cadence)
+    if (!isDomestic) {
+      const now = Date.now();
+      if (now - lastCLRefreshTs < CL_REFRESH_INTERVAL_MS) {
+        log.debug(`Skipping ${leagueName} refresh — last CL refresh ${((now - lastCLRefreshTs) / 1000).toFixed(0)}s ago`);
+        continue;
+      }
+      lastCLRefreshTs = now;
+    }
 
     try {
       const fixtures = await fetchLeagueFixtures(leagueId, fromStr, toStr);
@@ -81,16 +98,22 @@ export async function refreshMatches(): Promise<{
             ? `${f.goals.home}-${f.goals.away}`
             : "N/A";
 
+        // Resolve team names through alias map so API-Football and Odds API use the same canonical names.
+        // This prevents duplicate fixtures and ensures freezeKR alt-fixture fallback works.
+        const homeTeam = resolveOddsApiName(f.teams.home.name);
+        const awayTeam = resolveOddsApiName(f.teams.away.name);
+
         allRows.push({
           fixture_id: f.fixture.id,
           date: f.fixture.date.slice(0, 10),
-          league: f.league.name,
-          home_team: f.teams.home.name,
-          away_team: f.teams.away.name,
+          league: leagueName, // Use our config key, not API-Football's f.league.name (e.g. "Champions League" not "UEFA Champions League")
+          home_team: homeTeam,
+          away_team: awayTeam,
           score,
           status: finished ? "finished" : live ? "live" : "upcoming",
           status_code: statusCode,
           commence_time: f.fixture.date, // Full ISO datetime for sub-day resolution
+          competition: isDomestic ? "league" : "champions_league",
         });
       }
     } catch (err) {

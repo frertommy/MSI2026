@@ -11,7 +11,7 @@ import { supabase } from "@/lib/supabase";
  *   limit (optional): default 20, max 50
  *
  * Notes:
- *   - Match status values in DB: "scheduled", "not_started", "tbd", "finished", "cancelled"
+ *   - Match status values in DB: "upcoming", "finished", "cancelled" (+ rare: "scheduled", "not_started", "tbd")
  *   - Predictions use K=30, exclude gravity nudge and cause-effect clamp
  *   - V3 settlements (oracle_version='v3') may not exist yet — settled section returns empty
  */
@@ -214,13 +214,13 @@ async function fetchUpcomingMatches(
   leagues: string[],
   limit: number
 ): Promise<MatchRow[]> {
-  // DB status values for upcoming: "scheduled", "not_started", "tbd"
+  // DB status values for upcoming: "upcoming" (primary), plus "scheduled", "not_started", "tbd" as safety net
   const { data, error } = await supabase
     .from("matches")
     .select(
       "fixture_id, league, home_team, away_team, commence_time, status, score"
     )
-    .in("status", ["scheduled", "not_started", "tbd"])
+    .in("status", ["upcoming", "scheduled", "not_started", "tbd"])
     .in("league", leagues)
     .order("commence_time", { ascending: true })
     .limit(limit);

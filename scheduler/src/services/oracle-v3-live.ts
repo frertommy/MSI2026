@@ -226,10 +226,15 @@ export async function computeLiveLayerV3(
   const consensusDrawProb = rawDraw / total;
   const consensusAwayProb = rawAway / total;
 
-  // ── Step 9: Compute E_live ──────────────────────────────
-  const E_live = isHome
+  // ── Step 9: Compute E_live (draw-corrected to match E_KR) ─
+  // Raw expected score: homeProb + 0.5 × drawProb
+  // Draw correction: E = E_raw + drawProb × (0.5 − E_raw)
+  // This matches the correction applied in oracle-kr-freeze.ts,
+  // ensuring L=0 at kickoff when odds haven't changed.
+  const E_live_raw = isHome
     ? consensusHomeProb + 0.5 * consensusDrawProb
     : consensusAwayProb + 0.5 * consensusDrawProb;
+  const E_live = E_live_raw + consensusDrawProb * (0.5 - E_live_raw);
 
   // ── Step 10: L = K × (E_live − E_KR) ───────────────────
   const L = ORACLE_V3_K * (E_live - E_KR);

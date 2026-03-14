@@ -23,6 +23,7 @@ export const LEAGUE_SPORT_KEYS: Record<string, string> = {
   Bundesliga: "soccer_germany_bundesliga",
   "Serie A": "soccer_italy_serie_a",
   "Ligue 1": "soccer_france_ligue_one",
+  "Champions League": "soccer_uefa_champs_league",
 };
 
 // ─── League → API-Football league IDs ────────────────────────
@@ -32,7 +33,14 @@ export const LEAGUE_IDS: Record<string, number> = {
   Bundesliga: 78,
   "Serie A": 135,
   "Ligue 1": 61,
+  "Champions League": 2,
 };
+
+// ─── Domestic leagues (excludes CL/EL) ───────────────────────
+// Used to gate BT re-solve, R_next refresh, and gravity to league-only
+export const DOMESTIC_LEAGUES = new Set([
+  "Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1",
+]);
 
 // ─── Dynamic polling intervals (ms) ─────────────────────────
 export const POLL_INTERVALS = {
@@ -103,6 +111,7 @@ export const ORACLE_V3_ENABLED = true;                // V3 live — backfill co
 export const ORACLE_V3_LIVE_ENABLED = true;            // Live layer during matches (L = K × (E_live − E_KR))
 export const ORACLE_V3_K = 30;
 export const ORACLE_V3_GRAVITY_GAMMA = 0.08;           // B converges ~96% over a full season (1-0.92^38)
+export const ORACLE_V3_CL_GRAVITY_GAMMA = 0;            // No gravity for CL — avoids cross-contamination from league R_market
 export const ORACLE_V3_ALPHA = 0.40;                   // PT floor = 0.60. M1 = α × (R_market − B)
 export const ORACLE_V3_W_NEXT = 0.15;                  // R_market = (1-w)×R_network + w×R_next. 6% of price from next fixture.
 export const ORACLE_V3_M1_CLAMP = 120;                 // Safety rail ±120 ELO on M1

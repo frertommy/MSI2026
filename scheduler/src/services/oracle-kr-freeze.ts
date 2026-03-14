@@ -252,8 +252,14 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
   const drawProb = rawDraw / total;
   const awayProb = rawAway / total;
 
-  const homeExpectedScore = homeProb + 0.5 * drawProb;
-  const awayExpectedScore = awayProb + 0.5 * drawProb;
+  // Raw 2-outcome Elo expected score (stored for audit)
+  const homeExpectedScoreRaw = homeProb + 0.5 * drawProb;
+  const awayExpectedScoreRaw = awayProb + 0.5 * drawProb;
+
+  // Draw-corrected E_KR: fixes ~25 Elo/season systematic bias from 3-outcome mismatch
+  // E_corrected = E_raw + pDraw × (0.5 − E_raw)
+  const homeExpectedScore = homeExpectedScoreRaw + drawProb * (0.5 - homeExpectedScoreRaw);
+  const awayExpectedScore = awayExpectedScoreRaw + drawProb * (0.5 - awayExpectedScoreRaw);
 
   // Write to oracle_kr_snapshots
   const row = {
@@ -265,6 +271,8 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
     away_prob: Number(awayProb.toFixed(6)),
     home_expected_score: Number(homeExpectedScore.toFixed(6)),
     away_expected_score: Number(awayExpectedScore.toFixed(6)),
+    home_expected_score_raw: Number(homeExpectedScoreRaw.toFixed(6)),
+    away_expected_score_raw: Number(awayExpectedScoreRaw.toFixed(6)),
     raw_snapshots: bookmakerKRs.map(b => ({
       bookmaker: b.bookmaker,
       homeProb: Number(b.homeProb.toFixed(6)),
@@ -273,7 +281,7 @@ export async function freezeKR(fixtureId: number): Promise<FrozenKR | null> {
       k: b.k !== null ? Number(b.k.toFixed(6)) : null,
       snapshot_time: b.snapshot_time,
     })),
-    method: "power_devig_median_v1.4",
+    method: "power_devig_median_v1.5_draw_corrected",
     kr_degraded: krDegraded,
   };
 

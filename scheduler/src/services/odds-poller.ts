@@ -5,7 +5,7 @@ import {
   resolveOddsApiName,
   type TeamLookup,
 } from "../utils/team-names.js";
-import { LEAGUE_SPORT_KEYS } from "../config.js";
+import { LEAGUE_SPORT_KEYS, DOMESTIC_LEAGUES } from "../config.js";
 import { log } from "../logger.js";
 import type { PollResult, LiveOddsEvent } from "../types.js";
 import { CreditTracker } from "./credit-tracker.js";
@@ -52,6 +52,7 @@ async function createFixtureFromEvent(
     score: "N/A",
     status: "upcoming",
     commence_time: event.commence_time,
+    competition: DOMESTIC_LEAGUES.has(league) ? "league" : "champions_league",
   };
 
   const sb = getSupabase();
